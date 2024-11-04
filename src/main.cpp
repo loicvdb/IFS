@@ -545,7 +545,7 @@ int main()
 
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        vkCmdDraw(commandBuffer, 43046721, 1, 0, 0);
 
         vkCmdEndRenderPass(commandBuffer);
 
