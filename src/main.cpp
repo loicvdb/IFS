@@ -36,6 +36,99 @@ std::vector<uint32_t> readSpv(const char* path)
     return buffer;
 }
 
+struct Swapchain
+{
+    VkSwapchainKHR swapchain;
+    VkImageView imageViews[SWAPCHAIN_BUFFER_COUNT];
+    VkFramebuffer framebuffers[SWAPCHAIN_BUFFER_COUNT];
+};
+
+Swapchain createSwapchain(VkDevice device, VkSurfaceKHR surface, VkRenderPass renderPass, uint32_t width, uint32_t height)
+{
+    Swapchain swapchain{};
+
+    VkExtent2D swapchainExtent{};
+    swapchainExtent.width = width;
+    swapchainExtent.height = height;
+
+    VkSwapchainCreateInfoKHR swapchainCreateInfo{};
+    swapchainCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    swapchainCreateInfo.pNext = nullptr;
+    swapchainCreateInfo.flags = 0;
+    swapchainCreateInfo.surface = surface;
+    swapchainCreateInfo.minImageCount = SWAPCHAIN_BUFFER_COUNT;
+    swapchainCreateInfo.imageFormat = VK_FORMAT_B8G8R8A8_SRGB;
+    swapchainCreateInfo.imageColorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+    swapchainCreateInfo.imageExtent = swapchainExtent;
+    swapchainCreateInfo.imageArrayLayers = 1;
+    swapchainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    swapchainCreateInfo.queueFamilyIndexCount = 0;
+    swapchainCreateInfo.pQueueFamilyIndices = nullptr;
+    swapchainCreateInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    swapchainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    swapchainCreateInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    swapchainCreateInfo.clipped = VK_TRUE;
+    swapchainCreateInfo.oldSwapchain = VK_NULL_HANDLE;
+
+    ASSERT_SUCCESS(vkCreateSwapchainKHR(device, &swapchainCreateInfo, nullptr, &swapchain.swapchain));
+
+    VkImage swapchainImages[SWAPCHAIN_BUFFER_COUNT];
+
+    uint32_t swapchainImageCount = SWAPCHAIN_BUFFER_COUNT;
+    ASSERT_SUCCESS(vkGetSwapchainImagesKHR(device, swapchain.swapchain, &swapchainImageCount, swapchainImages));
+
+    assert(swapchainImageCount == SWAPCHAIN_BUFFER_COUNT);
+
+    for (uint32_t i = 0; i < SWAPCHAIN_BUFFER_COUNT; i++)
+    {
+        VkImageSubresourceRange subresourceRange{};
+        subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        subresourceRange.baseMipLevel = 0;
+        subresourceRange.levelCount = 1;
+        subresourceRange.baseArrayLayer = 0;
+        subresourceRange.layerCount = 1;
+
+        VkImageViewCreateInfo imageViewCreateInfo{};
+        imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        imageViewCreateInfo.pNext = nullptr;
+        imageViewCreateInfo.flags = 0;
+        imageViewCreateInfo.image = swapchainImages[i];
+        imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        imageViewCreateInfo.format = VK_FORMAT_B8G8R8A8_SRGB;
+        imageViewCreateInfo.components = {};
+        imageViewCreateInfo.subresourceRange = subresourceRange;
+
+        ASSERT_SUCCESS(vkCreateImageView(device, &imageViewCreateInfo, nullptr, &swapchain.imageViews[i]));
+
+        VkFramebufferCreateInfo framebufferCreateInfo{};
+        framebufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferCreateInfo.pNext = nullptr;
+        framebufferCreateInfo.flags = 0;
+        framebufferCreateInfo.renderPass = renderPass;
+        framebufferCreateInfo.attachmentCount = 1;
+        framebufferCreateInfo.pAttachments = &swapchain.imageViews[i];
+        framebufferCreateInfo.width = width;
+        framebufferCreateInfo.height = height;
+        framebufferCreateInfo.layers = 1;
+
+        ASSERT_SUCCESS(vkCreateFramebuffer(device, &framebufferCreateInfo, nullptr, &swapchain.framebuffers[i]));
+    }
+
+    return swapchain;
+}
+
+void destroySwapchain(VkDevice device, const Swapchain& swapchain)
+{
+    for (uint32_t i = 0; i < SWAPCHAIN_BUFFER_COUNT; i++)
+    {
+        vkDestroyImageView(device, swapchain.imageViews[i], nullptr);
+        vkDestroyFramebuffer(device, swapchain.framebuffers[i], nullptr);
+    }
+
+    vkDestroySwapchainKHR(device, swapchain.swapchain, nullptr);
+}
+
 int main()
 {
     glfwInit();
@@ -125,42 +218,6 @@ int main()
 
     VkCommandPool commandPool;
     ASSERT_SUCCESS(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &commandPool));
-
-    const uint32_t width = 800;
-    const uint32_t height = 600;
-
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    GLFWwindow* window = glfwCreateWindow(width, height, "Vulkan window", nullptr, nullptr);
-
-    VkSurfaceKHR surface;
-    ASSERT_SUCCESS(glfwCreateWindowSurface(instance, window, nullptr, &surface));
-
-    VkExtent2D swapchainExtent{};
-    swapchainExtent.width = width;
-    swapchainExtent.height = height;
-
-    VkSwapchainCreateInfoKHR swapchainCreateInfo{};
-    swapchainCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    swapchainCreateInfo.pNext = nullptr;
-    swapchainCreateInfo.flags = 0;
-    swapchainCreateInfo.surface = surface;
-    swapchainCreateInfo.minImageCount = SWAPCHAIN_BUFFER_COUNT;
-    swapchainCreateInfo.imageFormat = VK_FORMAT_B8G8R8A8_SRGB;
-    swapchainCreateInfo.imageColorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
-    swapchainCreateInfo.imageExtent = swapchainExtent;
-    swapchainCreateInfo.imageArrayLayers = 1;
-    swapchainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    swapchainCreateInfo.queueFamilyIndexCount = 0;
-    swapchainCreateInfo.pQueueFamilyIndices = nullptr;
-    swapchainCreateInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-    swapchainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    swapchainCreateInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
-    swapchainCreateInfo.clipped = VK_TRUE;
-    swapchainCreateInfo.oldSwapchain = VK_NULL_HANDLE;
-
-    VkSwapchainKHR swapchain;
-    ASSERT_SUCCESS(vkCreateSwapchainKHR(device, &swapchainCreateInfo, nullptr, &swapchain));
 
     VkAttachmentDescription colorAttachment{};
     colorAttachment.flags = 0;
@@ -402,50 +459,16 @@ int main()
     vkDestroyShaderModule(device, vertShaderModule, nullptr);
     vkDestroyShaderModule(device, fragShaderModule, nullptr);
 
-    VkImage swapchainImages[SWAPCHAIN_BUFFER_COUNT];
-    VkImageView swapchainImageViews[SWAPCHAIN_BUFFER_COUNT];
-    VkFramebuffer swapchainFramebuffers[SWAPCHAIN_BUFFER_COUNT];
+    uint32_t width = 800;
+    uint32_t height = 600;
 
-    uint32_t swapchainImageCount = SWAPCHAIN_BUFFER_COUNT;
-    ASSERT_SUCCESS(vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, swapchainImages));
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    GLFWwindow* window = glfwCreateWindow(width, height, "Vulkan window", nullptr, nullptr);
 
-    assert(swapchainImageCount == SWAPCHAIN_BUFFER_COUNT);
+    VkSurfaceKHR surface;
+    ASSERT_SUCCESS(glfwCreateWindowSurface(instance, window, nullptr, &surface));
 
-    for (uint32_t i = 0; i < SWAPCHAIN_BUFFER_COUNT; i++)
-    {
-        VkImageSubresourceRange subresourceRange{};
-        subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        subresourceRange.baseMipLevel = 0;
-        subresourceRange.levelCount = 1;
-        subresourceRange.baseArrayLayer = 0;
-        subresourceRange.layerCount = 1;
-
-        VkImageViewCreateInfo imageViewCreateInfo{};
-        imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        imageViewCreateInfo.pNext = nullptr;
-        imageViewCreateInfo.flags = 0;
-        imageViewCreateInfo.image = swapchainImages[i];
-        imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        imageViewCreateInfo.format = VK_FORMAT_B8G8R8A8_SRGB;
-        imageViewCreateInfo.components = {};
-        imageViewCreateInfo.subresourceRange = subresourceRange;
-
-        ASSERT_SUCCESS(vkCreateImageView(device, &imageViewCreateInfo, nullptr, &swapchainImageViews[i]));
-
-        VkFramebufferCreateInfo framebufferCreateInfo{};
-        framebufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferCreateInfo.pNext = nullptr;
-        framebufferCreateInfo.flags = 0;
-        framebufferCreateInfo.renderPass = renderPass;
-        framebufferCreateInfo.attachmentCount = 1;
-        framebufferCreateInfo.pAttachments = &swapchainImageViews[i];
-        framebufferCreateInfo.width = width;
-        framebufferCreateInfo.height = height;
-        framebufferCreateInfo.layers = 1;
-
-        ASSERT_SUCCESS(vkCreateFramebuffer(device, &framebufferCreateInfo, nullptr, &swapchainFramebuffers[i]));
-    }
-    
+    Swapchain swapchain = createSwapchain(device, surface, renderPass, width, height);
     
     while (!glfwWindowShouldClose(window))
     {
@@ -463,7 +486,9 @@ int main()
         ASSERT_SUCCESS(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &presentSemaphore));
 
         uint32_t imageIndex;
-        ASSERT_SUCCESS(vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquireSemaphore, nullptr, &imageIndex));
+        VkResult acquireResult = vkAcquireNextImageKHR(device, swapchain.swapchain, UINT64_MAX, acquireSemaphore, nullptr, &imageIndex);
+
+        assert(acquireResult == VK_SUCCESS || acquireResult == VK_ERROR_OUT_OF_DATE_KHR || acquireResult == VK_SUBOPTIMAL_KHR);
 
         VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
         commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -499,7 +524,7 @@ int main()
         renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         renderPassBeginInfo.pNext = nullptr;
         renderPassBeginInfo.renderPass = renderPass;
-        renderPassBeginInfo.framebuffer = swapchainFramebuffers[imageIndex];
+        renderPassBeginInfo.framebuffer = swapchain.framebuffers[imageIndex];
         renderPassBeginInfo.renderArea = renderArea;
         renderPassBeginInfo.clearValueCount = 1;
         renderPassBeginInfo.pClearValues = &clearValue;
@@ -541,45 +566,51 @@ int main()
 
         ASSERT_SUCCESS(vkQueueSubmit(queue, 1, &submitInfo, nullptr));
 
-        VkResult presentResult;
-
         VkPresentInfoKHR presentInfo{};
         presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         presentInfo.pNext = nullptr;
         presentInfo.waitSemaphoreCount = 1;
         presentInfo.pWaitSemaphores = &presentSemaphore;
         presentInfo.swapchainCount = 1;
-        presentInfo.pSwapchains = &swapchain;
+        presentInfo.pSwapchains = &swapchain.swapchain;
         presentInfo.pImageIndices = &imageIndex;
-        presentInfo.pResults = &presentResult;
+        presentInfo.pResults = nullptr;
 
-        ASSERT_SUCCESS(vkQueuePresentKHR(queue, &presentInfo));
-
-        ASSERT_SUCCESS(presentResult);
+        VkResult presentResult = vkQueuePresentKHR(queue, &presentInfo);
 
         ASSERT_SUCCESS(vkQueueWaitIdle(queue));
 
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
         vkDestroySemaphore(device, presentSemaphore, nullptr);
         vkDestroySemaphore(device, acquireSemaphore, nullptr);
+
+        if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR)
+        {
+            destroySwapchain(device, swapchain);
+
+            int newWidth, newHeight;
+            glfwGetWindowSize(window, &newWidth, &newHeight);
+
+            width = static_cast<uint32_t>(newWidth);
+            height = static_cast<uint32_t>(newHeight);
+
+            swapchain = createSwapchain(device, surface, renderPass, width, height);
+        }
+        else
+        {
+            ASSERT_SUCCESS(presentResult);
+        }
     }
 
-    for (uint32_t i = 0; i < SWAPCHAIN_BUFFER_COUNT; i++)
-    {
-        vkDestroyImageView(device, swapchainImageViews[i], nullptr);
+    destroySwapchain(device, swapchain);
 
-        vkDestroyFramebuffer(device, swapchainFramebuffers[i], nullptr);
-    }
+    vkDestroySurfaceKHR(instance, surface, nullptr);
 
     vkDestroyPipeline(device, pipeline, nullptr);
 
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 
     vkDestroyRenderPass(device, renderPass, nullptr);
-
-    vkDestroySwapchainKHR(device, swapchain, nullptr);
-
-    vkDestroySurfaceKHR(instance, surface, nullptr);
 
     vkDestroyCommandPool(device, commandPool, nullptr);
 
