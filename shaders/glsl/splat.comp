@@ -11,7 +11,7 @@ void main()
     float s = 1.0;
     
     uint idx = gl_GlobalInvocationID.x;
-    for (uint i = 0u; i < 19u; i++)
+    for (uint i = 0u; i < 16u; i++)
     {
         uint m = idx %3u;
         idx = idx / 3u;
@@ -26,8 +26,18 @@ void main()
         s *= 0.5;
         #endif
     }
-
-    ivec2 pix = ivec2((p * 0.5 + 0.5) * vec2(imageSize(depth)));
     
-    imageAtomicMin(depth, pix, gl_GlobalInvocationID.x);
+    for (uint i0 = 0u; i0 < 3u; i0++)
+    {
+        vec2 p0 = p + s * 0.25 * (i0 == 0 ? vec2(0.0, 0.5) : i0 == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5));
+        for (uint i1 = 0u; i1 < 3u; i1++)
+        {
+            vec2 p1 = p0 + s * 0.5 * (i1 == 0 ? vec2(0.0, 0.5) : i1 == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5));
+            for (uint i2 = 0u; i2 < 3u; i2++)
+            {
+                vec2 p2 = p1 + s * 1.0 * (i2 == 0 ? vec2(0.0, 0.5) : i2 == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5));
+                imageAtomicMin(depth, ivec2((p2 * 0.5 + 0.5) * vec2(imageSize(depth))), gl_GlobalInvocationID.x);
+            }
+        }
+    }
 }

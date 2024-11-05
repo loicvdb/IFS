@@ -527,7 +527,7 @@ int main()
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &depthComputeToComputeBarrier);
 
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, splatPipeline);
-        vkCmdDispatch(commandBuffer, (1162261467u + 255u) / 256u, 1, 1);
+        vkCmdDispatch(commandBuffer, (43046721u + 255u) / 256u, 1, 1);
 
         // guard depth writes against reads
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &depthComputeToComputeBarrier);
