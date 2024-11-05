@@ -27,17 +27,41 @@ void main()
         #endif
     }
     
+    uvec2 splats[27];
+    uint splatCount = 0u;
+    
     for (uint i0 = 0u; i0 < 3u; i0++)
     {
-        vec2 p0 = p + s * 0.25 * (i0 == 0 ? vec2(0.0, 0.5) : i0 == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5));
+        vec2 p0 = p + s * 1.0 * (i0 == 0 ? vec2(0.0, 0.5) : i0 == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5));
         for (uint i1 = 0u; i1 < 3u; i1++)
         {
             vec2 p1 = p0 + s * 0.5 * (i1 == 0 ? vec2(0.0, 0.5) : i1 == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5));
             for (uint i2 = 0u; i2 < 3u; i2++)
             {
-                vec2 p2 = p1 + s * 1.0 * (i2 == 0 ? vec2(0.0, 0.5) : i2 == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5));
-                imageAtomicMin(depth, ivec2((p2 * 0.5 + 0.5) * vec2(imageSize(depth))), gl_GlobalInvocationID.x);
+                vec2 p2 = p1 + s * 0.25 * (i2 == 0 ? vec2(0.0, 0.5) : i2 == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5));
+                ivec2 splatPos = ivec2((p2 * 0.5 + 0.5) * vec2(imageSize(depth)));
+                uint splatDepth = gl_GlobalInvocationID.x;
+                uvec2 splat = uvec2(uint(splatPos.x) << 16 | uint(splatPos.y), splatDepth);
+                uvec2 lastSplat = splats[splatCount - 1];
+                if (splatCount > 0 && lastSplat.x == splat.x)
+                {
+                    // merge
+                    splats[splatCount - 1].y = min(splat.y, lastSplat.y);
+                }
+                else
+                {
+                    // add
+                    splats[splatCount] = splat;
+                    splatCount++;
+                }
             }
         }
+    }
+    
+    for (uint i = 0; i < splatCount; i++)
+    {
+        uvec2 splat = splats[i];
+        ivec2 pos = ivec2(splat.x >> 16, splat.x & 0xFFFFu);
+        imageAtomicMin(depth, pos, splat.y);
     }
 }
