@@ -645,13 +645,13 @@ int main()
         frameData.matrices[0] = randomTransform(1 + 3 * fractSeed);
         frameData.matrices[1] = randomTransform(2 + 3 * fractSeed);
         frameData.matrices[2] = randomTransform(3 + 3 * fractSeed);
-        frameData.color0 = glm::vec4(0.7, 0.1, 0.4, 0.0);
-        frameData.color1 = glm::vec4(0.1, 0.4, 0.7, 0.0);
+        frameData.color0 = glm::vec4(0.9, 0.0, 0.7, 0.0);
+        frameData.color1 = glm::vec4(0.0, 0.7, 0.9, 0.0);
         frameData.view = view;
         frameData.fov = 0.1f;
         frameData.focalPlane = 14.75f;
         frameData.aperture = 0.03f;
-        frameData.exposure = 1000.0f / pow(3.0f, static_cast<float>(FRACTAL_ITERATIONS));
+        frameData.exposure = 500.0f / pow(3.0f, static_cast<float>(FRACTAL_ITERATIONS));
         frameData.iterationCount = FRACTAL_ITERATIONS - 3;
 
         pMappedFrameData[imageIndex] = frameData;
