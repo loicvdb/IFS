@@ -22,6 +22,12 @@ void checkResult(VkResult result)
 
 #define SHADER_PATH "./shaders/"
 
+// uses fp units, a bit hacky
+#define UINT_POW(x, y) static_cast<uint32_t>(round(pow(float(x), float(y))))
+
+// 3^17 => 129m points
+#define FRACTAL_ITERATIONS 17
+
 uint32_t fractSeed = 0;
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
@@ -229,6 +235,14 @@ void destroySwapchain(VkDevice device, VmaAllocator allocator, const Swapchain& 
 
     vkDestroySwapchainKHR(device, swapchain.swapchain, nullptr);
 }
+
+struct alignas(16) FrameData
+{
+    glm::mat4 matrices[3];
+    glm::mat4 viewProj;
+    glm::mat4 inverseViewProj;
+    glm::uint iterationCount;
+};
 
 struct WorkInFlight
 {
@@ -510,7 +524,7 @@ int main()
     bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferCreateInfo.pNext = nullptr;
     bufferCreateInfo.flags = 0;
-    bufferCreateInfo.size = SWAPCHAIN_BUFFER_COUNT * 4 * sizeof(glm::mat4);
+    bufferCreateInfo.size = SWAPCHAIN_BUFFER_COUNT * sizeof(FrameData);
     bufferCreateInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
     bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     bufferCreateInfo.queueFamilyIndexCount = 0;
@@ -525,6 +539,8 @@ int main()
     VmaAllocation bufferAllocation;
     VmaAllocationInfo bufferAllocationInfo;
     ASSERT_SUCCESS(vmaCreateBuffer(allocator, &bufferCreateInfo, &allocationCreateInfo, &buffer, &bufferAllocation, &bufferAllocationInfo));
+
+    FrameData* pMappedFrameData = reinterpret_cast<FrameData*>(bufferAllocationInfo.pMappedData);
 
     float angle = 0.0f;
 
@@ -606,17 +622,17 @@ int main()
         glm::mat4 view = glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(0.0, 0.0, -16.0)), angle, glm::vec3(0.0f, 1.0f, 0.0f));
         glm::mat4 proj = glm::perspectiveFov(0.3f, static_cast<float>(width), static_cast<float>(height), 9.0f, 21.0f);
 
-        glm::mat4 matrices[4]
-        {
-            randomTransform(1 + 3 * fractSeed),
-            randomTransform(2 + 3 * fractSeed),
-            randomTransform(3 + 3 * fractSeed),
-            proj * view
-        };
+        FrameData frameData{};
+        frameData.matrices[0] = randomTransform(1 + 3 * fractSeed);
+        frameData.matrices[1] = randomTransform(2 + 3 * fractSeed);
+        frameData.matrices[2] = randomTransform(3 + 3 * fractSeed);
+        frameData.viewProj = proj * view;
+        frameData.inverseViewProj = glm::inverse(proj * view);
+        frameData.iterationCount = FRACTAL_ITERATIONS - 3;
 
-        memcpy(reinterpret_cast<char*>(bufferAllocationInfo.pMappedData) + (imageIndex * 4 * sizeof(glm::mat4)), matrices, 4 * sizeof(glm::mat4));
+        pMappedFrameData[imageIndex] = frameData;
 
-        vmaFlushAllocation(allocator, bufferAllocation, imageIndex * 4 * sizeof(glm::mat4), 4 * sizeof(glm::mat4));
+        vmaFlushAllocation(allocator, bufferAllocation, imageIndex * sizeof(FrameData), sizeof(FrameData));
 
         VkDescriptorSetAllocateInfo descriptorSetAllocateInfo{};
         descriptorSetAllocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -664,8 +680,8 @@ int main()
 
         VkDescriptorBufferInfo matricesInfo{};
         matricesInfo.buffer = buffer;
-        matricesInfo.offset = imageIndex * 4 * sizeof(glm::mat4);
-        matricesInfo.range = 4 * sizeof(glm::mat4);
+        matricesInfo.offset = imageIndex * sizeof(FrameData);
+        matricesInfo.range = sizeof(FrameData);
 
         VkWriteDescriptorSet matricesWrite{};
         matricesWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -815,7 +831,7 @@ int main()
         vkCmdPipelineBarrier(graphicsCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &depthComputeToComputeBarrier);
 
         vkCmdBindPipeline(graphicsCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, splatPipeline);
-        vkCmdDispatch(graphicsCommandBuffer, (531441u + 255u) / 256u, 1, 1);
+        vkCmdDispatch(graphicsCommandBuffer, (UINT_POW(3, FRACTAL_ITERATIONS - 3) + 255u) / 256u, 1, 1);
 
         // guard depth writes against reads
         vkCmdPipelineBarrier(graphicsCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &depthComputeToComputeBarrier);

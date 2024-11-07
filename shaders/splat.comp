@@ -4,81 +4,44 @@ layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(binding = 0, r32ui) uniform uimage2D depthImage;
 layout(binding = 1, rgba8) uniform image2D colorImage;
-layout(binding = 2) uniform Matrices
+layout(binding = 2) uniform FrameData
 {
-    mat4 m0;
-    mat4 m1;
-    mat4 m2;
-    mat4 proj;
-} matrices;
+    mat4 matrices[3];
+    mat4 viewProj;
+    mat4 inverseViewProj;
+    uint iterationCount;
+} frameData;
 
-uint upow(uint x, uint y)
-{
-    uint p1 = x;
-    uint p2 = p1 * p1;
-    uint p4 = p2 * p2;
-    uint p8 = p4 * p4;
-    uint p16 = p8 * p8;
-    
-    uint res = 1;
-    if (y >= 16u)
-    {
-        res *= p16;
-        y -= 16u;
-    }
-    if (y >= 8u)
-    {
-        res *= p8;
-        y -= 8u;
-    }
-    if (y >= 4u)
-    {
-        res *= p4;
-        y -= 4u;
-    }
-    if (y >= 2u)
-    {
-        res *= p2;
-        y -= 2u;
-    }
-    if (y >= 1u)
-    {
-        res *= p1;
-        y -= 1u;
-    }
-    
-    return res;
-}
-
-vec3 transform(vec3 p, uint m)
-{
-    return ((m == 0 ? matrices.m0 : m == 1 ? matrices.m1 : matrices.m2) * vec4(p, 1.0)).xyz;
-}
-
-#define LOOP_ITERATIONS 12u
+// uses fp units, a bit hacky
+#define UINT_POW(x, y) uint(round(pow(float(x), float(y))))
 
 void main()
 {
+    // each thread splats 27 points, all points share the last N iterations which allows us to
+    // do most of the compute 1 time for all 27 points
+
+    // computes the common part of the transform
     vec3 p = vec3(0.0);
-    for (uint i = 0u; i < LOOP_ITERATIONS; i++)
+    for (uint i = 0u; i < frameData.iterationCount; i++)
     {
-        uint m = (gl_GlobalInvocationID.x / upow(3u, LOOP_ITERATIONS - 1u - i)) % 3u;
-        p = transform(p, m);
+        uint m = (gl_GlobalInvocationID.x / UINT_POW(3u, frameData.iterationCount - 1u - i)) % 3u;
+        p = (frameData.matrices[m] * vec4(p, 1.0)).xyz;
     }
     
     vec2 resolution = vec2(imageSize(depthImage));
     
+    // use this transform to splat 3^3 (27) points
     for (uint i0 = 0u; i0 < 3u; i0++)
     {
-        vec3 p0 = transform(p, i0);
+        vec3 p0 = (frameData.matrices[i0] * vec4(p, 1.0)).xyz;
         for (uint i1 = 0u; i1 < 3u; i1++)
         {
-            vec3 p1 = transform(p0, i1);
+            vec3 p1 = (frameData.matrices[i1] * vec4(p0, 1.0)).xyz;
             for (uint i2 = 0u; i2 < 3u; i2++)
             {
-                vec3 p2 = transform(p1, i2);
+                vec3 p2 = (frameData.matrices[i2] * vec4(p1, 1.0)).xyz;
                 
-                vec4 clip = matrices.proj * vec4(p2, 1.0);
+                vec4 clip = frameData.viewProj * vec4(p2, 1.0);
                 
                 if (clip.w < 0.0 || clip.x < -clip.w || clip.x > clip.w || clip.y < -clip.w || clip.y > clip.w || clip.z < 0.0 || clip.z > clip.w)
                 {
