@@ -24,8 +24,6 @@ void checkResult(VkResult result)
 
 uint32_t fractSeed = 0;
 
-#define MULTI_QUEUE 1
-
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
     if (key == GLFW_KEY_LEFT && action == GLFW_PRESS)
@@ -300,15 +298,7 @@ int main()
         }
     }
 
-#if MULTI_QUEUE
-    assert(presentQueueFamilyIndex != graphicsQueueFamilyIndex);
-
-    if (presentQueueFamilyIndex == graphicsQueueFamilyIndex)
-    {
-        // we can't have multi queue
-        return -1;
-    }
-#endif
+    bool multiQueue = presentQueueFamilyIndex != graphicsQueueFamilyIndex;
 
     assert(glfwGetPhysicalDevicePresentationSupport(instance, physicalDevice, presentQueueFamilyIndex));
 
@@ -330,20 +320,18 @@ int main()
     presentQueueCreateInfo.queueCount = 1;
     presentQueueCreateInfo.pQueuePriorities = &queuePriority;
 
-#if MULTI_QUEUE
-    const uint32_t queueCreateInfoCount = 2;
-    VkDeviceQueueCreateInfo queueCreateInfos[queueCreateInfoCount]
+    const uint32_t multiQueueCreateInfoCount = 2;
+    VkDeviceQueueCreateInfo multiQueueCreateInfos[multiQueueCreateInfoCount]
     {
         graphicsQueueCreateInfo,
         presentQueueCreateInfo
     };
-#else
-    const uint32_t queueCreateInfoCount = 1;
-    VkDeviceQueueCreateInfo queueCreateInfos[queueCreateInfoCount]
+
+    const uint32_t singleQueueCreateInfoCount = 1;
+    VkDeviceQueueCreateInfo singleQueueCreateInfos[singleQueueCreateInfoCount]
     {
         graphicsQueueCreateInfo
     };
-#endif
 
     const uint32_t deviceExtensionCount = 1;
     const char* deviceExtensionNames[deviceExtensionCount]
@@ -357,8 +345,8 @@ int main()
     deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     deviceCreateInfo.pNext = nullptr;
     deviceCreateInfo.flags = 0;
-    deviceCreateInfo.queueCreateInfoCount = queueCreateInfoCount;
-    deviceCreateInfo.pQueueCreateInfos = queueCreateInfos;
+    deviceCreateInfo.queueCreateInfoCount = multiQueue ? multiQueueCreateInfoCount : singleQueueCreateInfoCount;
+    deviceCreateInfo.pQueueCreateInfos = multiQueue ? multiQueueCreateInfos : singleQueueCreateInfos;
     deviceCreateInfo.enabledLayerCount = 0;
     deviceCreateInfo.ppEnabledLayerNames = nullptr;
     deviceCreateInfo.enabledExtensionCount = deviceExtensionCount;
@@ -835,99 +823,104 @@ int main()
         vkCmdBindPipeline(graphicsCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, displayPipeline);
         vkCmdDispatch(graphicsCommandBuffer, (width + 15u) / 16u, (height + 15u) / 16u, 1);
 
-#if MULTI_QUEUE
-        // release ownership
-        vkCmdPipelineBarrier(graphicsCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &colorComputeToOwnershipReleaseBarrier);
-#else
-        // transfer image from graphics to present queue
-        vkCmdPipelineBarrier(graphicsCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &colorComputeToPresentBarrier);
-#endif
+        VkResult presentResult;
 
-        ASSERT_SUCCESS(vkEndCommandBuffer(graphicsCommandBuffer));
+        if (multiQueue)
+        {
+            // release ownership
+            vkCmdPipelineBarrier(graphicsCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &colorComputeToOwnershipReleaseBarrier);
 
-#if MULTI_QUEUE
-        VkPipelineStageFlags graphicsWaitDstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            ASSERT_SUCCESS(vkEndCommandBuffer(graphicsCommandBuffer));
 
-        VkSubmitInfo graphicsSubmitInfo{};
-        graphicsSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        graphicsSubmitInfo.pNext = nullptr;
-        graphicsSubmitInfo.waitSemaphoreCount = 1;
-        graphicsSubmitInfo.pWaitSemaphores = &acquireSemaphore;
-        graphicsSubmitInfo.pWaitDstStageMask = &graphicsWaitDstStageMask;
-        graphicsSubmitInfo.commandBufferCount = 1;
-        graphicsSubmitInfo.pCommandBuffers = &graphicsCommandBuffer;
-        graphicsSubmitInfo.signalSemaphoreCount = 1;
-        graphicsSubmitInfo.pSignalSemaphores = &queueTransferSemaphore;
+            VkPipelineStageFlags graphicsWaitDstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-        ASSERT_SUCCESS(vkQueueSubmit(graphicsQueue, 1, &graphicsSubmitInfo, nullptr));
+            VkSubmitInfo graphicsSubmitInfo{};
+            graphicsSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            graphicsSubmitInfo.pNext = nullptr;
+            graphicsSubmitInfo.waitSemaphoreCount = 1;
+            graphicsSubmitInfo.pWaitSemaphores = &acquireSemaphore;
+            graphicsSubmitInfo.pWaitDstStageMask = &graphicsWaitDstStageMask;
+            graphicsSubmitInfo.commandBufferCount = 1;
+            graphicsSubmitInfo.pCommandBuffers = &graphicsCommandBuffer;
+            graphicsSubmitInfo.signalSemaphoreCount = 1;
+            graphicsSubmitInfo.pSignalSemaphores = &queueTransferSemaphore;
 
-        VkCommandBufferBeginInfo presentCommandBufferBeginInfo{};
-        presentCommandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        presentCommandBufferBeginInfo.pNext = nullptr;
-        presentCommandBufferBeginInfo.flags = 0;
-        presentCommandBufferBeginInfo.pInheritanceInfo = nullptr;
+            ASSERT_SUCCESS(vkQueueSubmit(graphicsQueue, 1, &graphicsSubmitInfo, nullptr));
 
-        ASSERT_SUCCESS(vkBeginCommandBuffer(presentCommandBuffer, &presentCommandBufferBeginInfo));
+            VkCommandBufferBeginInfo presentCommandBufferBeginInfo{};
+            presentCommandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            presentCommandBufferBeginInfo.pNext = nullptr;
+            presentCommandBufferBeginInfo.flags = 0;
+            presentCommandBufferBeginInfo.pInheritanceInfo = nullptr;
 
-        // transfer image from graphics to present queue
-        vkCmdPipelineBarrier(presentCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &colorOwnershipAcquireToPresentBarrier);
+            ASSERT_SUCCESS(vkBeginCommandBuffer(presentCommandBuffer, &presentCommandBufferBeginInfo));
 
-        ASSERT_SUCCESS(vkEndCommandBuffer(presentCommandBuffer));
+            // transfer image from graphics to present queue
+            vkCmdPipelineBarrier(presentCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &colorOwnershipAcquireToPresentBarrier);
 
-        VkPipelineStageFlags presentWaitDstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            ASSERT_SUCCESS(vkEndCommandBuffer(presentCommandBuffer));
 
-        VkSubmitInfo presentSubmitInfo{};
-        presentSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        presentSubmitInfo.pNext = nullptr;
-        presentSubmitInfo.waitSemaphoreCount = 1;
-        presentSubmitInfo.pWaitSemaphores = &queueTransferSemaphore;
-        presentSubmitInfo.pWaitDstStageMask = &presentWaitDstStageMask;
-        presentSubmitInfo.commandBufferCount = 1;
-        presentSubmitInfo.pCommandBuffers = &presentCommandBuffer;
-        presentSubmitInfo.signalSemaphoreCount = 1;
-        presentSubmitInfo.pSignalSemaphores = &presentSemaphore;
+            VkPipelineStageFlags presentWaitDstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 
-        ASSERT_SUCCESS(vkQueueSubmit(presentQueue, 1, &presentSubmitInfo, renderingFence));
+            VkSubmitInfo presentSubmitInfo{};
+            presentSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            presentSubmitInfo.pNext = nullptr;
+            presentSubmitInfo.waitSemaphoreCount = 1;
+            presentSubmitInfo.pWaitSemaphores = &queueTransferSemaphore;
+            presentSubmitInfo.pWaitDstStageMask = &presentWaitDstStageMask;
+            presentSubmitInfo.commandBufferCount = 1;
+            presentSubmitInfo.pCommandBuffers = &presentCommandBuffer;
+            presentSubmitInfo.signalSemaphoreCount = 1;
+            presentSubmitInfo.pSignalSemaphores = &presentSemaphore;
 
-        VkPresentInfoKHR presentInfo{};
-        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        presentInfo.pNext = nullptr;
-        presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores = &presentSemaphore;
-        presentInfo.swapchainCount = 1;
-        presentInfo.pSwapchains = &swapchain.swapchain;
-        presentInfo.pImageIndices = &imageIndex;
-        presentInfo.pResults = nullptr;
+            ASSERT_SUCCESS(vkQueueSubmit(presentQueue, 1, &presentSubmitInfo, renderingFence));
 
-        VkResult presentResult = vkQueuePresentKHR(presentQueue, &presentInfo);
-#else
-        VkPipelineStageFlags graphicsWaitDstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            VkPresentInfoKHR presentInfo{};
+            presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+            presentInfo.pNext = nullptr;
+            presentInfo.waitSemaphoreCount = 1;
+            presentInfo.pWaitSemaphores = &presentSemaphore;
+            presentInfo.swapchainCount = 1;
+            presentInfo.pSwapchains = &swapchain.swapchain;
+            presentInfo.pImageIndices = &imageIndex;
+            presentInfo.pResults = nullptr;
 
-        VkSubmitInfo graphicsSubmitInfo{};
-        graphicsSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        graphicsSubmitInfo.pNext = nullptr;
-        graphicsSubmitInfo.waitSemaphoreCount = 1;
-        graphicsSubmitInfo.pWaitSemaphores = &acquireSemaphore;
-        graphicsSubmitInfo.pWaitDstStageMask = &graphicsWaitDstStageMask;
-        graphicsSubmitInfo.commandBufferCount = 1;
-        graphicsSubmitInfo.pCommandBuffers = &graphicsCommandBuffer;
-        graphicsSubmitInfo.signalSemaphoreCount = 1;
-        graphicsSubmitInfo.pSignalSemaphores = &presentSemaphore;
+            presentResult = vkQueuePresentKHR(presentQueue, &presentInfo);
 
-        ASSERT_SUCCESS(vkQueueSubmit(graphicsQueue, 1, &graphicsSubmitInfo, renderingFence));
+        }
+        else
+        {    // transfer image from graphics to present queue
+            vkCmdPipelineBarrier(graphicsCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &colorComputeToPresentBarrier);
 
-        VkPresentInfoKHR presentInfo{};
-        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        presentInfo.pNext = nullptr;
-        presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores = &presentSemaphore;
-        presentInfo.swapchainCount = 1;
-        presentInfo.pSwapchains = &swapchain.swapchain;
-        presentInfo.pImageIndices = &imageIndex;
-        presentInfo.pResults = nullptr;
+            ASSERT_SUCCESS(vkEndCommandBuffer(graphicsCommandBuffer));
 
-        VkResult presentResult = vkQueuePresentKHR(graphicsQueue, &presentInfo);
-#endif
+            VkPipelineStageFlags graphicsWaitDstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+            VkSubmitInfo graphicsSubmitInfo{};
+            graphicsSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            graphicsSubmitInfo.pNext = nullptr;
+            graphicsSubmitInfo.waitSemaphoreCount = 1;
+            graphicsSubmitInfo.pWaitSemaphores = &acquireSemaphore;
+            graphicsSubmitInfo.pWaitDstStageMask = &graphicsWaitDstStageMask;
+            graphicsSubmitInfo.commandBufferCount = 1;
+            graphicsSubmitInfo.pCommandBuffers = &graphicsCommandBuffer;
+            graphicsSubmitInfo.signalSemaphoreCount = 1;
+            graphicsSubmitInfo.pSignalSemaphores = &presentSemaphore;
+
+            ASSERT_SUCCESS(vkQueueSubmit(graphicsQueue, 1, &graphicsSubmitInfo, renderingFence));
+
+            VkPresentInfoKHR presentInfo{};
+            presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+            presentInfo.pNext = nullptr;
+            presentInfo.waitSemaphoreCount = 1;
+            presentInfo.pWaitSemaphores = &presentSemaphore;
+            presentInfo.swapchainCount = 1;
+            presentInfo.pSwapchains = &swapchain.swapchain;
+            presentInfo.pImageIndices = &imageIndex;
+            presentInfo.pResults = nullptr;
+
+            presentResult = vkQueuePresentKHR(graphicsQueue, &presentInfo);
+        }
 
         WorkInFlight newWorkInFlight{};
         newWorkInFlight.descriptorSet = descriptorSet;
