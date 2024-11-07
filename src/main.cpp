@@ -278,15 +278,37 @@ int main()
     assert(enumeratePhysicalDevicesRes == VK_SUCCESS || enumeratePhysicalDevicesRes == VK_INCOMPLETE);
     assert(physicalDeviceCount > 0);
 
-    uint32_t graphicsQueueFamilyIndex = 0;  // Nvidia only for now
-    uint32_t presentQueueFamilyIndex = 2;   // Nvidia only for now
-
     VkQueueFamilyProperties queueFamilyProperties[16];
     uint32_t queueFamilyPropertyCount = 16;
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyPropertyCount, queueFamilyProperties);
 
+    // graphics queue is always the first
+    uint32_t graphicsQueueFamilyIndex = 0;
+
     assert(queueFamilyProperties[graphicsQueueFamilyIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT);
     assert(queueFamilyProperties[graphicsQueueFamilyIndex].queueFlags & VK_QUEUE_COMPUTE_BIT);
+
+    uint32_t presentQueueFamilyIndex = 0;
+
+    // check if other present queues exist
+    for (uint32_t i = 1; i < queueFamilyPropertyCount; i++)
+    {
+        if (glfwGetPhysicalDevicePresentationSupport(instance, physicalDevice, i))
+        {
+            presentQueueFamilyIndex = i;
+            break;
+        }
+    }
+
+#if MULTI_QUEUE
+    assert(presentQueueFamilyIndex != graphicsQueueFamilyIndex);
+
+    if (presentQueueFamilyIndex == graphicsQueueFamilyIndex)
+    {
+        // we can't have multi queue
+        return -1;
+    }
+#endif
 
     assert(glfwGetPhysicalDevicePresentationSupport(instance, physicalDevice, presentQueueFamilyIndex));
 
@@ -308,12 +330,20 @@ int main()
     presentQueueCreateInfo.queueCount = 1;
     presentQueueCreateInfo.pQueuePriorities = &queuePriority;
 
+#if MULTI_QUEUE
     const uint32_t queueCreateInfoCount = 2;
     VkDeviceQueueCreateInfo queueCreateInfos[queueCreateInfoCount]
     {
         graphicsQueueCreateInfo,
         presentQueueCreateInfo
     };
+#else
+    const uint32_t queueCreateInfoCount = 1;
+    VkDeviceQueueCreateInfo queueCreateInfos[queueCreateInfoCount]
+    {
+        graphicsQueueCreateInfo
+    };
+#endif
 
     const uint32_t deviceExtensionCount = 1;
     const char* deviceExtensionNames[deviceExtensionCount]
@@ -876,12 +906,15 @@ int main()
         VkResult presentResult = vkQueuePresentKHR(graphicsQueue, &presentInfo);
 #endif
 
-        workInFlights[imageIndex].descriptorSet = descriptorSet;
-        workInFlights[imageIndex].queueTransferSemaphore = queueTransferSemaphore;
-        workInFlights[imageIndex].acquireSemaphore = acquireSemaphore;
-        workInFlights[imageIndex].presentCommandBuffer = presentCommandBuffer;
+        WorkInFlight newWorkInFlight{};
+        newWorkInFlight.descriptorSet = descriptorSet;
+        newWorkInFlight.graphicsCommandBuffer = graphicsCommandBuffer;
+        newWorkInFlight.presentCommandBuffer = presentCommandBuffer;
+        newWorkInFlight.acquireSemaphore = acquireSemaphore;
+        newWorkInFlight.queueTransferSemaphore = queueTransferSemaphore;
+        newWorkInFlight.renderingFence = renderingFence;
 
-        workInFlights[imageIndex].renderingFence = renderingFence;
+        workInFlights[imageIndex] = newWorkInFlight;
 
         presentSemaphores[presentSemaphoreIndex] = presentSemaphore;
 
