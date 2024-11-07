@@ -44,9 +44,9 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 
 glm::mat4 randomTransform(uint32_t seed)
 {
-    float scaleX      = glm::mix(0.6f, 0.8f, float(0xa265c5cfu * seed) / float(0xFFFFFFFFu));
-    float scaleY      = glm::mix(0.6f, 0.8f, float(0x531680cbu * seed) / float(0xFFFFFFFFu));
-    float scaleZ      = glm::mix(0.6f, 0.8f, float(0x69f2cf94u * seed) / float(0xFFFFFFFFu));
+    float scaleX      = glm::mix(0.5f, 0.8f, float(0xa265c5cfu * seed) / float(0xFFFFFFFFu));
+    float scaleY      = glm::mix(0.5f, 0.8f, float(0x531680cbu * seed) / float(0xFFFFFFFFu));
+    float scaleZ      = glm::mix(0.5f, 0.8f, float(0x69f2cf94u * seed) / float(0xFFFFFFFFu));
     float rotateAngle = glm::mix(-3.f, 3.0f, float(0x5153c709u * seed) / float(0xFFFFFFFFu));
     float rotateVecX  = glm::mix(-1.f, 1.0f, float(0x288ef917u * seed) / float(0xFFFFFFFFu));
     float rotateVecY  = glm::mix(-1.f, 1.0f, float(0xbe62e7f9u * seed) / float(0xFFFFFFFFu));
@@ -239,8 +239,13 @@ void destroySwapchain(VkDevice device, VmaAllocator allocator, const Swapchain& 
 struct alignas(64) FrameData
 {
     glm::mat4 matrices[3];
-    glm::mat4 viewProj;
-    glm::mat4 inverseViewProj;
+    glm::mat4 view;
+    glm::vec4 color0;
+    glm::vec4 color1;
+    glm::float32 fov;
+    glm::float32 focalPlane;
+    glm::float32 aperture;
+    glm::float32 exposure;
     glm::uint iterationCount;
 };
 
@@ -634,15 +639,19 @@ int main()
 
         angle += 0.01f;
 
-        glm::mat4 view = glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(0.0, 0.0, -16.0)), angle, glm::vec3(0.0f, 1.0f, 0.0f));
-        glm::mat4 proj = glm::perspectiveFov(0.3f, static_cast<float>(width), static_cast<float>(height), 9.0f, 21.0f);
+        glm::mat4 view = glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(0.0, 0.0, -15.0)), angle, glm::vec3(0.0f, 1.0f, 0.0f));
 
         FrameData frameData{};
         frameData.matrices[0] = randomTransform(1 + 3 * fractSeed);
         frameData.matrices[1] = randomTransform(2 + 3 * fractSeed);
         frameData.matrices[2] = randomTransform(3 + 3 * fractSeed);
-        frameData.viewProj = proj * view;
-        frameData.inverseViewProj = glm::inverse(proj * view);
+        frameData.color0 = glm::vec4(0.7, 0.1, 0.4, 0.0);
+        frameData.color1 = glm::vec4(0.1, 0.4, 0.7, 0.0);
+        frameData.view = view;
+        frameData.fov = 0.1f;
+        frameData.focalPlane = 14.75f;
+        frameData.aperture = 0.03f;
+        frameData.exposure = 1000.0f / pow(3.0f, static_cast<float>(FRACTAL_ITERATIONS));
         frameData.iterationCount = FRACTAL_ITERATIONS - 3;
 
         pMappedFrameData[imageIndex] = frameData;
