@@ -1039,5 +1039,5 @@ int main()
 
     glfwTerminate();
 
-	return 0;
+    return 0;
 }
