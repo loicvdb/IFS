@@ -20,7 +20,7 @@ void checkResult(VkResult result)
 #define ASSERT_SUCCESS(res) checkResult(res)
 #define SWAPCHAIN_BUFFER_COUNT 3
 
-#define SHADER_PATH "../shaders/spv/"
+#define SHADER_PATH "./shaders/"
 
 uint32_t fractSeed = 0;
 
