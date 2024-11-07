@@ -236,7 +236,7 @@ void destroySwapchain(VkDevice device, VmaAllocator allocator, const Swapchain& 
     vkDestroySwapchainKHR(device, swapchain.swapchain, nullptr);
 }
 
-struct alignas(16) FrameData
+struct alignas(64) FrameData
 {
     glm::mat4 matrices[3];
     glm::mat4 viewProj;
