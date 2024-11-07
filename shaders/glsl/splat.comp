@@ -2,66 +2,97 @@
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, r32ui) uniform uimage2D depth;
-layout(set = 0, binding = 1, rgba8) uniform image2D color;
+layout(binding = 0, r32ui) uniform uimage2D depthImage;
+layout(binding = 1, rgba8) uniform image2D colorImage;
+layout(binding = 2) uniform Matrices
+{
+    mat4 m0;
+    mat4 m1;
+    mat4 m2;
+    mat4 proj;
+} matrices;
+
+uint upow(uint x, uint y)
+{
+    uint p1 = x;
+    uint p2 = p1 * p1;
+    uint p4 = p2 * p2;
+    uint p8 = p4 * p4;
+    uint p16 = p8 * p8;
+    
+    uint res = 1;
+    if (y >= 16u)
+    {
+        res *= p16;
+        y -= 16u;
+    }
+    if (y >= 8u)
+    {
+        res *= p8;
+        y -= 8u;
+    }
+    if (y >= 4u)
+    {
+        res *= p4;
+        y -= 4u;
+    }
+    if (y >= 2u)
+    {
+        res *= p2;
+        y -= 2u;
+    }
+    if (y >= 1u)
+    {
+        res *= p1;
+        y -= 1u;
+    }
+    
+    return res;
+}
+
+vec3 transform(vec3 p, uint m)
+{
+    return ((m == 0 ? matrices.m0 : m == 1 ? matrices.m1 : matrices.m2) * vec4(p, 1.0)).xyz;
+}
+
+#define LOOP_ITERATIONS 12u
 
 void main()
 {
-    vec2 p = vec2(0.0);
-    float s = 1.0;
-    
-    uint idx = gl_GlobalInvocationID.x;
-    for (uint i = 0u; i < 16u; i++)
+    vec3 p = vec3(0.0);
+    for (uint i = 0u; i < LOOP_ITERATIONS; i++)
     {
-        uint m = idx %3u;
-        idx = idx / 3u;
-        
-        vec2 o = m == 0 ? vec2(0.0, 0.5) : m == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5);
-        
-        #if 0
-        // trashes performance for some reason
-        p = o + 0.5 * p;
-        #else
-        p += s * o;
-        s *= 0.5;
-        #endif
+        uint m = (gl_GlobalInvocationID.x / upow(3u, LOOP_ITERATIONS - 1u - i)) % 3u;
+        p = transform(p, m);
     }
     
-    uvec2 splats[27];
-    uint splatCount = 0u;
+    vec2 resolution = vec2(imageSize(depthImage));
     
     for (uint i0 = 0u; i0 < 3u; i0++)
     {
-        vec2 p0 = p + s * 1.0 * (i0 == 0 ? vec2(0.0, 0.5) : i0 == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5));
+        vec3 p0 = transform(p, i0);
         for (uint i1 = 0u; i1 < 3u; i1++)
         {
-            vec2 p1 = p0 + s * 0.5 * (i1 == 0 ? vec2(0.0, 0.5) : i1 == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5));
+            vec3 p1 = transform(p0, i1);
             for (uint i2 = 0u; i2 < 3u; i2++)
             {
-                vec2 p2 = p1 + s * 0.25 * (i2 == 0 ? vec2(0.0, 0.5) : i2 == 1 ? vec2(-0.5, -0.5) : vec2(0.5, -0.5));
-                ivec2 splatPos = ivec2((p2 * 0.5 + 0.5) * vec2(imageSize(depth)));
-                uint splatDepth = gl_GlobalInvocationID.x;
-                uvec2 splat = uvec2(uint(splatPos.x) << 16 | uint(splatPos.y), splatDepth);
-                uvec2 lastSplat = splats[splatCount - 1];
-                if (splatCount > 0 && lastSplat.x == splat.x)
+                vec3 p2 = transform(p1, i2);
+                
+                vec4 clip = matrices.proj * vec4(p2, 1.0);
+                
+                if (clip.w < 0.0 || clip.x < -clip.w || clip.x > clip.w || clip.y < -clip.w || clip.y > clip.w || clip.z < 0.0 || clip.z > clip.w)
                 {
-                    // merge
-                    splats[splatCount - 1].y = min(splat.y, lastSplat.y);
+                    continue;
                 }
-                else
-                {
-                    // add
-                    splats[splatCount] = splat;
-                    splatCount++;
-                }
+                
+                vec3 ndc = clip.xyz / clip.w;
+                vec3 frustum = vec3((ndc.xy * 0.5 + 0.5) * resolution, ndc.z);
+                
+                ivec2 splatPos = ivec2(frustum.xy);
+                uint splatDepth = uint(float(0xFFFFFFFFu) * frustum.z);
+                
+                imageAtomicMin(depthImage, splatPos, splatDepth);
             }
         }
-    }
-    
-    for (uint i = 0; i < splatCount; i++)
-    {
-        uvec2 splat = splats[i];
-        ivec2 pos = ivec2(splat.x >> 16, splat.x & 0xFFFFu);
-        imageAtomicMin(depth, pos, splat.y);
     }
 }

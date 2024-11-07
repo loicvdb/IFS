@@ -2,10 +2,17 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, r32ui) uniform uimage2D depth;
-layout(set = 0, binding = 1, rgba8) uniform image2D color;
+layout(binding = 0, r32ui) uniform uimage2D depthImage;
+layout(binding = 1, rgba8) uniform image2D colorImage;
+layout(binding = 2) uniform Matrices
+{
+    mat4 m0;
+    mat4 m1;
+    mat4 m2;
+    mat4 proj;
+} matrices;
 
 void main()
 {
-    imageStore(depth, ivec2(gl_GlobalInvocationID.xy), uvec4(0xFFFFFFFFu));
+    imageStore(depthImage, ivec2(gl_GlobalInvocationID.xy), uvec4(0xFFFFFFFFu));
 }
