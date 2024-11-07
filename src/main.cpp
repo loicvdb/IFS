@@ -246,7 +246,6 @@ struct alignas(64) FrameData
 
 struct WorkInFlight
 {
-    VkDescriptorSet descriptorSet;
     VkCommandBuffer graphicsCommandBuffer;
     VkCommandBuffer presentCommandBuffer;
     VkSemaphore acquireSemaphore;
@@ -484,6 +483,23 @@ int main()
     VkDescriptorPool descriptorPool;
     vkCreateDescriptorPool(device, &descriptorPoolCreateInfo, nullptr, &descriptorPool);
 
+    VkDescriptorSetLayout descriptorSetLayouts[SWAPCHAIN_BUFFER_COUNT];
+
+    for (uint32_t i = 0; i < SWAPCHAIN_BUFFER_COUNT; i++)
+    {
+        descriptorSetLayouts[i] = descriptorSetLayout;
+    }
+
+    VkDescriptorSetAllocateInfo descriptorSetAllocateInfo{};
+    descriptorSetAllocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    descriptorSetAllocateInfo.pNext = nullptr;
+    descriptorSetAllocateInfo.descriptorPool = descriptorPool;
+    descriptorSetAllocateInfo.descriptorSetCount = SWAPCHAIN_BUFFER_COUNT;
+    descriptorSetAllocateInfo.pSetLayouts = descriptorSetLayouts;
+
+    VkDescriptorSet descriptorSets[SWAPCHAIN_BUFFER_COUNT];
+    vkAllocateDescriptorSets(device, &descriptorSetAllocateInfo, descriptorSets);
+
     uint32_t width = 1280;
     uint32_t height = 720;
 
@@ -597,7 +613,6 @@ int main()
         {
             ASSERT_SUCCESS(vkWaitForFences(device, 1, &workInFlights[imageIndex].renderingFence, VK_TRUE, UINT64_MAX));
 
-            vkFreeDescriptorSets(device, descriptorPool, 1, &workInFlights[imageIndex].descriptorSet);
             vkFreeCommandBuffers(device, graphicsCommandPool, 1, &workInFlights[imageIndex].graphicsCommandBuffer);
             vkFreeCommandBuffers(device, presentCommandPool, 1, &workInFlights[imageIndex].presentCommandBuffer);
             vkDestroySemaphore(device, workInFlights[imageIndex].acquireSemaphore, nullptr);
@@ -634,16 +649,6 @@ int main()
 
         vmaFlushAllocation(allocator, bufferAllocation, imageIndex * sizeof(FrameData), sizeof(FrameData));
 
-        VkDescriptorSetAllocateInfo descriptorSetAllocateInfo{};
-        descriptorSetAllocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        descriptorSetAllocateInfo.pNext = nullptr;
-        descriptorSetAllocateInfo.descriptorPool = descriptorPool;
-        descriptorSetAllocateInfo.descriptorSetCount = 1;
-        descriptorSetAllocateInfo.pSetLayouts = &descriptorSetLayout;
-
-        VkDescriptorSet descriptorSet;
-        vkAllocateDescriptorSets(device, &descriptorSetAllocateInfo, &descriptorSet);
-
         VkDescriptorImageInfo depthInfo{};
         depthInfo.sampler = VK_NULL_HANDLE;
         depthInfo.imageView = swapchain.depthImageViews[imageIndex];
@@ -652,7 +657,7 @@ int main()
         VkWriteDescriptorSet depthWrite{};
         depthWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         depthWrite.pNext = nullptr;
-        depthWrite.dstSet = descriptorSet;
+        depthWrite.dstSet = descriptorSets[imageIndex];
         depthWrite.dstBinding = 0;
         depthWrite.dstArrayElement = 0;
         depthWrite.descriptorCount = 1;
@@ -669,7 +674,7 @@ int main()
         VkWriteDescriptorSet colorWrite{};
         colorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         colorWrite.pNext = nullptr;
-        colorWrite.dstSet = descriptorSet;
+        colorWrite.dstSet = descriptorSets[imageIndex];
         colorWrite.dstBinding = 1;
         colorWrite.dstArrayElement = 0;
         colorWrite.descriptorCount = 1;
@@ -686,7 +691,7 @@ int main()
         VkWriteDescriptorSet matricesWrite{};
         matricesWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         matricesWrite.pNext = nullptr;
-        matricesWrite.dstSet = descriptorSet;
+        matricesWrite.dstSet = descriptorSets[imageIndex];
         matricesWrite.dstBinding = 2;
         matricesWrite.dstArrayElement = 0;
         matricesWrite.descriptorCount = 1;
@@ -733,7 +738,7 @@ int main()
 
         ASSERT_SUCCESS(vkBeginCommandBuffer(graphicsCommandBuffer, &graphicsCommandBufferBeginInfo));
 
-        vkCmdBindDescriptorSets(graphicsCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
+        vkCmdBindDescriptorSets(graphicsCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSets[imageIndex], 0, nullptr);
 
         VkImageSubresourceRange wholeImageRange{};
         wholeImageRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -939,7 +944,6 @@ int main()
         }
 
         WorkInFlight newWorkInFlight{};
-        newWorkInFlight.descriptorSet = descriptorSet;
         newWorkInFlight.graphicsCommandBuffer = graphicsCommandBuffer;
         newWorkInFlight.presentCommandBuffer = presentCommandBuffer;
         newWorkInFlight.acquireSemaphore = acquireSemaphore;
@@ -989,7 +993,6 @@ int main()
     {
         if (workInFlights[i].renderingFence != VK_NULL_HANDLE)
         {
-            vkFreeDescriptorSets(device, descriptorPool, 1, &workInFlights[i].descriptorSet);
             vkFreeCommandBuffers(device, graphicsCommandPool, 1, &workInFlights[i].graphicsCommandBuffer);
             vkFreeCommandBuffers(device, presentCommandPool, 1, &workInFlights[i].presentCommandBuffer);
             vkDestroySemaphore(device, workInFlights[i].acquireSemaphore, nullptr);
