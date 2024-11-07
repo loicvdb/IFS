@@ -120,7 +120,7 @@ struct Swapchain
     VmaAllocation depthImageAllocations[SWAPCHAIN_BUFFER_COUNT];
 };
 
-Swapchain createSwapchain(VkDevice device, VmaAllocator allocator, VkSurfaceKHR surface, uint32_t width, uint32_t height)
+Swapchain createSwapchain(VkDevice device, VmaAllocator allocator, VkSurfaceKHR surface, VkPresentModeKHR presentMode, uint32_t width, uint32_t height)
 {
     Swapchain swapchain{};
 
@@ -144,7 +144,7 @@ Swapchain createSwapchain(VkDevice device, VmaAllocator allocator, VkSurfaceKHR 
     swapchainCreateInfo.pQueueFamilyIndices = nullptr;
     swapchainCreateInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     swapchainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    swapchainCreateInfo.presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+    swapchainCreateInfo.presentMode = presentMode;
     swapchainCreateInfo.clipped = VK_TRUE;
     swapchainCreateInfo.oldSwapchain = VK_NULL_HANDLE;
 
@@ -493,7 +493,30 @@ int main()
     VkSurfaceKHR surface;
     ASSERT_SUCCESS(glfwCreateWindowSurface(instance, window, nullptr, &surface));
 
-    Swapchain swapchain = createSwapchain(device, allocator, surface, width, height);
+    VkPresentModeKHR presentModes[16];
+    uint32_t presentModeCount = 16;
+    ASSERT_SUCCESS(vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes));
+
+    assert(presentModeCount > 0);
+
+    bool supportsMailbox = false;
+    bool supportsFifoRelaxed = false;
+    bool supportsImmediate = false;
+
+    for (uint32_t i = 0; i < presentModeCount; i++)
+    {
+        supportsMailbox = supportsMailbox || presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR;
+        supportsFifoRelaxed = supportsFifoRelaxed || presentModes[i] == VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+        supportsImmediate = supportsImmediate || presentModes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR;
+    }
+
+    VkPresentModeKHR presentMode =
+        supportsMailbox ? VK_PRESENT_MODE_MAILBOX_KHR :
+        supportsFifoRelaxed ? VK_PRESENT_MODE_FIFO_RELAXED_KHR :
+        supportsImmediate ? VK_PRESENT_MODE_IMMEDIATE_KHR :
+        VK_PRESENT_MODE_FIFO_KHR;
+
+    Swapchain swapchain = createSwapchain(device, allocator, surface, presentMode, width, height);
 
     VkBufferCreateInfo bufferCreateInfo{};
     bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -942,7 +965,7 @@ int main()
                 width = static_cast<uint32_t>(newWidth);
                 height = static_cast<uint32_t>(newHeight);
 
-                swapchain = createSwapchain(device, allocator, surface, width, height);
+                swapchain = createSwapchain(device, allocator, surface, presentMode, width, height);
             }
         }
         else
