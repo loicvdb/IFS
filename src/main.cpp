@@ -1,6 +1,4 @@
-#define VMA_IMPLEMENTATION
-#include "vma/vk_mem_alloc.h"
-#include "GLFW/glfw3.h"
+#include "abstraction_glfw.h"
 #include "glm/glm.hpp"
 
 #define GLM_FORCE_LEFT_HANDED
@@ -8,17 +6,10 @@
 #define GLM_FORCE_RADIANS
 #include "glm/gtc/matrix_transform.hpp"
 
-#include <iostream>
 #include <fstream>
 #include <vector>
-
-void checkResult(VkResult result)
-{
-    assert(result == VK_SUCCESS);
-}
-
-#define ASSERT_SUCCESS(res) checkResult(res)
-#define SWAPCHAIN_BUFFER_COUNT 3
+#include <chrono>
+#include <thread>
 
 #define SHADER_PATH "./shaders/"
 
@@ -27,6 +18,8 @@ void checkResult(VkResult result)
 
 // 3^17 => 129m points
 #define FRACTAL_ITERATIONS 17
+
+#define WORK_IN_FLIGHT_COUNT 2
 
 uint32_t fractSeed = 0;
 
@@ -62,13 +55,13 @@ glm::mat4 randomTransform(uint32_t seed)
     return scale * rotate * translate;
 }
 
-VkPipeline loadPipeline(VkDevice device, VkPipelineLayout pipelineLayout, const char* path)
+Pipeline loadPipeline(Device device, PipelineLayout pipelineLayout, const char* path)
 {
     std::ifstream file(path, std::ios::ate | std::ios::binary);
 
     assert(file.is_open());
 
-    size_t fileSize = (size_t) file.tellg();
+    size_t fileSize = static_cast<size_t>(file.tellg());
 
     assert(fileSize % sizeof(uint32_t) == 0);
 
@@ -78,165 +71,10 @@ VkPipeline loadPipeline(VkDevice device, VkPipelineLayout pipelineLayout, const 
     file.read(reinterpret_cast<char*>(spv.data()), fileSize);
     file.close();
 
-    VkShaderModuleCreateInfo shaderModuleCreateInfo{};
-    shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    shaderModuleCreateInfo.pNext = nullptr;
-    shaderModuleCreateInfo.flags = 0;
-    shaderModuleCreateInfo.codeSize = static_cast<uint32_t>(spv.size() * sizeof(uint32_t));
-    shaderModuleCreateInfo.pCode = spv.data();
-
-    VkShaderModule shaderModule;
-    ASSERT_SUCCESS(vkCreateShaderModule(device, &shaderModuleCreateInfo, nullptr, &shaderModule));
-
-    VkPipelineShaderStageCreateInfo shaderStageCreateInfo{};
-    shaderStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    shaderStageCreateInfo.pNext = nullptr;
-    shaderStageCreateInfo.flags = 0;
-    shaderStageCreateInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    shaderStageCreateInfo.module = shaderModule;
-    shaderStageCreateInfo.pName = "main";
-    shaderStageCreateInfo.pSpecializationInfo = nullptr;
-
-    VkComputePipelineCreateInfo pipelineCreateInfo{};
-    pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipelineCreateInfo.pNext = nullptr;
-    pipelineCreateInfo.flags = 0;
-    pipelineCreateInfo.stage = shaderStageCreateInfo;
-    pipelineCreateInfo.layout = pipelineLayout;
-    pipelineCreateInfo.basePipelineHandle = VK_NULL_HANDLE;
-    pipelineCreateInfo.basePipelineIndex = 0;
-
-    VkPipeline pipeline;
-    ASSERT_SUCCESS(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &pipeline));
-
-    vkDestroyShaderModule(device, shaderModule, nullptr);
-
-    return pipeline;
+    return device.createPipeline(pipelineLayout, spv.size() * sizeof(uint32_t), spv.data());
 }
 
-struct Swapchain
-{
-    VkSwapchainKHR swapchain;
-    VkImage colorImages[SWAPCHAIN_BUFFER_COUNT];
-    VkImageView colorImageViews[SWAPCHAIN_BUFFER_COUNT];
-    VkImage depthImages[SWAPCHAIN_BUFFER_COUNT];
-    VkImageView depthImageViews[SWAPCHAIN_BUFFER_COUNT];
-    VmaAllocation depthImageAllocations[SWAPCHAIN_BUFFER_COUNT];
-};
-
-Swapchain createSwapchain(VkDevice device, VmaAllocator allocator, VkSurfaceKHR surface, VkPresentModeKHR presentMode, uint32_t width, uint32_t height)
-{
-    Swapchain swapchain{};
-
-    VkExtent2D swapchainExtent{};
-    swapchainExtent.width = width;
-    swapchainExtent.height = height;
-
-    VkSwapchainCreateInfoKHR swapchainCreateInfo{};
-    swapchainCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    swapchainCreateInfo.pNext = nullptr;
-    swapchainCreateInfo.flags = 0;
-    swapchainCreateInfo.surface = surface;
-    swapchainCreateInfo.minImageCount = SWAPCHAIN_BUFFER_COUNT;
-    swapchainCreateInfo.imageFormat = VK_FORMAT_B8G8R8A8_UNORM;
-    swapchainCreateInfo.imageColorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
-    swapchainCreateInfo.imageExtent = swapchainExtent;
-    swapchainCreateInfo.imageArrayLayers = 1;
-    swapchainCreateInfo.imageUsage = VK_IMAGE_USAGE_STORAGE_BIT;
-    swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    swapchainCreateInfo.queueFamilyIndexCount = 0;
-    swapchainCreateInfo.pQueueFamilyIndices = nullptr;
-    swapchainCreateInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-    swapchainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    swapchainCreateInfo.presentMode = presentMode;
-    swapchainCreateInfo.clipped = VK_TRUE;
-    swapchainCreateInfo.oldSwapchain = VK_NULL_HANDLE;
-
-    ASSERT_SUCCESS(vkCreateSwapchainKHR(device, &swapchainCreateInfo, nullptr, &swapchain.swapchain));
-
-    uint32_t swapchainImageCount = SWAPCHAIN_BUFFER_COUNT;
-    ASSERT_SUCCESS(vkGetSwapchainImagesKHR(device, swapchain.swapchain, &swapchainImageCount, swapchain.colorImages));
-
-    assert(swapchainImageCount == SWAPCHAIN_BUFFER_COUNT);
-
-    for (uint32_t i = 0; i < SWAPCHAIN_BUFFER_COUNT; i++)
-    {
-        VkImageSubresourceRange wholeSubresourceRange{};
-        wholeSubresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        wholeSubresourceRange.baseMipLevel = 0;
-        wholeSubresourceRange.levelCount = 1;
-        wholeSubresourceRange.baseArrayLayer = 0;
-        wholeSubresourceRange.layerCount = 1;
-
-        VkImageViewCreateInfo imageViewCreateInfo{};
-        imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        imageViewCreateInfo.pNext = nullptr;
-        imageViewCreateInfo.flags = 0;
-        imageViewCreateInfo.image = swapchain.colorImages[i];
-        imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        imageViewCreateInfo.format = VK_FORMAT_B8G8R8A8_UNORM;
-        imageViewCreateInfo.components = {};
-        imageViewCreateInfo.subresourceRange = wholeSubresourceRange;
-
-        ASSERT_SUCCESS(vkCreateImageView(device, &imageViewCreateInfo, nullptr, &swapchain.colorImageViews[i]));
-
-        VkExtent3D depthImageExtent{};
-        depthImageExtent.width = width;
-        depthImageExtent.height = height;
-        depthImageExtent.depth = 1;
-
-        VkImageCreateInfo depthImageCreateInfo{};
-        depthImageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        depthImageCreateInfo.pNext = nullptr;
-        depthImageCreateInfo.flags = 0;
-        depthImageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
-        depthImageCreateInfo.format = VK_FORMAT_R32_UINT;
-        depthImageCreateInfo.extent = depthImageExtent;
-        depthImageCreateInfo.mipLevels = 1;
-        depthImageCreateInfo.arrayLayers = 1;
-        depthImageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-        depthImageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        depthImageCreateInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT;
-        depthImageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        depthImageCreateInfo.queueFamilyIndexCount = 0;
-        depthImageCreateInfo.pQueueFamilyIndices = nullptr;
-        depthImageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-        VmaAllocationCreateInfo allocationCreateInfo{};
-        allocationCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        allocationCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-
-        ASSERT_SUCCESS(vmaCreateImage(allocator, &depthImageCreateInfo, &allocationCreateInfo, &swapchain.depthImages[i], &swapchain.depthImageAllocations[i], nullptr));
-
-        VkImageViewCreateInfo depthImageViewCreateInfo{};
-        depthImageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        depthImageViewCreateInfo.pNext = nullptr;
-        depthImageViewCreateInfo.flags = 0;
-        depthImageViewCreateInfo.image = swapchain.depthImages[i];
-        depthImageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        depthImageViewCreateInfo.format = VK_FORMAT_R32_UINT;
-        depthImageViewCreateInfo.components = {};
-        depthImageViewCreateInfo.subresourceRange = wholeSubresourceRange;
-
-        ASSERT_SUCCESS(vkCreateImageView(device, &depthImageViewCreateInfo, nullptr, &swapchain.depthImageViews[i]));
-    }
-
-    return swapchain;
-}
-
-void destroySwapchain(VkDevice device, VmaAllocator allocator, const Swapchain& swapchain)
-{
-    for (uint32_t i = 0; i < SWAPCHAIN_BUFFER_COUNT; i++)
-    {
-        vkDestroyImageView(device, swapchain.depthImageViews[i], nullptr);
-        vmaDestroyImage(allocator, swapchain.depthImages[i], swapchain.depthImageAllocations[i]);
-        vkDestroyImageView(device, swapchain.colorImageViews[i], nullptr);
-    }
-
-    vkDestroySwapchainKHR(device, swapchain.swapchain, nullptr);
-}
-
-struct alignas(64) FrameData
+struct FrameData
 {
     glm::mat4 matrices[3];
     glm::mat4 view;
@@ -249,261 +87,25 @@ struct alignas(64) FrameData
     glm::uint iterationCount;
 };
 
-struct WorkInFlight
-{
-    VkCommandBuffer graphicsCommandBuffer;
-    VkCommandBuffer presentCommandBuffer;
-    VkSemaphore acquireSemaphore;
-    VkSemaphore queueTransferSemaphore;
-    VkFence renderingFence;
-};
-
 int main()
 {
     glfwInit();
 
-    uint32_t instanceExtensionCount;
-    const char** instanceExtensionNames = glfwGetRequiredInstanceExtensions(&instanceExtensionCount);
+    Device device = createDevice();
 
-    VkApplicationInfo applicationInfo{};
-    applicationInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    applicationInfo.pNext = nullptr;
-    applicationInfo.pApplicationName = "IFS";
-    applicationInfo.applicationVersion = VK_MAKE_API_VERSION(0, 0, 0, 0);
-    applicationInfo.pEngineName = "";
-    applicationInfo.engineVersion = VK_MAKE_API_VERSION(0, 0, 0, 0);
-    applicationInfo.apiVersion = VK_API_VERSION_1_0;
-
-    VkInstanceCreateInfo instanceCreateInfo{};
-    instanceCreateInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    instanceCreateInfo.pNext = nullptr;
-    instanceCreateInfo.flags = 0;
-    instanceCreateInfo.pApplicationInfo = &applicationInfo;
-    instanceCreateInfo.enabledLayerCount = 0;
-    instanceCreateInfo.ppEnabledLayerNames = nullptr;
-    instanceCreateInfo.enabledExtensionCount = instanceExtensionCount;
-    instanceCreateInfo.ppEnabledExtensionNames = instanceExtensionNames;
-
-    VkInstance instance;
-    ASSERT_SUCCESS(vkCreateInstance(&instanceCreateInfo, nullptr, &instance));
-
-    VkPhysicalDevice physicalDevice;
-    uint32_t physicalDeviceCount = 1;
-    VkResult enumeratePhysicalDevicesRes = vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, &physicalDevice);
-
-    assert(enumeratePhysicalDevicesRes == VK_SUCCESS || enumeratePhysicalDevicesRes == VK_INCOMPLETE);
-    assert(physicalDeviceCount > 0);
-
-    VkQueueFamilyProperties queueFamilyProperties[16];
-    uint32_t queueFamilyPropertyCount = 16;
-    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyPropertyCount, queueFamilyProperties);
-
-    // graphics queue is always the first
-    uint32_t graphicsQueueFamilyIndex = 0;
-
-    assert(queueFamilyProperties[graphicsQueueFamilyIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT);
-    assert(queueFamilyProperties[graphicsQueueFamilyIndex].queueFlags & VK_QUEUE_COMPUTE_BIT);
-
-    uint32_t presentQueueFamilyIndex = 0;
-
-    // check if other present queues exist
-    for (uint32_t i = 1; i < queueFamilyPropertyCount; i++)
+    const uint32_t descriptorCount = 3;
+    DescriptorType descriptorTypes[descriptorCount]
     {
-        if (glfwGetPhysicalDevicePresentationSupport(instance, physicalDevice, i))
-        {
-            presentQueueFamilyIndex = i;
-            break;
-        }
-    }
-
-    bool multiQueue = presentQueueFamilyIndex != graphicsQueueFamilyIndex;
-
-    assert(glfwGetPhysicalDevicePresentationSupport(instance, physicalDevice, presentQueueFamilyIndex));
-
-    float queuePriority = 1.0f;
-
-    VkDeviceQueueCreateInfo graphicsQueueCreateInfo{};
-    graphicsQueueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    graphicsQueueCreateInfo.pNext = nullptr;
-    graphicsQueueCreateInfo.flags = 0;
-    graphicsQueueCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
-    graphicsQueueCreateInfo.queueCount = 1;
-    graphicsQueueCreateInfo.pQueuePriorities = &queuePriority;
-
-    VkDeviceQueueCreateInfo presentQueueCreateInfo{};
-    presentQueueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    presentQueueCreateInfo.pNext = nullptr;
-    presentQueueCreateInfo.flags = 0;
-    presentQueueCreateInfo.queueFamilyIndex = presentQueueFamilyIndex;
-    presentQueueCreateInfo.queueCount = 1;
-    presentQueueCreateInfo.pQueuePriorities = &queuePriority;
-
-    const uint32_t multiQueueCreateInfoCount = 2;
-    VkDeviceQueueCreateInfo multiQueueCreateInfos[multiQueueCreateInfoCount]
-    {
-        graphicsQueueCreateInfo,
-        presentQueueCreateInfo
+        DescriptorType::StorageImage,
+        DescriptorType::StorageImage,
+        DescriptorType::UniformBuffer
     };
 
-    const uint32_t singleQueueCreateInfoCount = 1;
-    VkDeviceQueueCreateInfo singleQueueCreateInfos[singleQueueCreateInfoCount]
-    {
-        graphicsQueueCreateInfo
-    };
+    PipelineLayout pipelineLayout = device.createPipelineLayout(descriptorCount, descriptorTypes);
 
-    const uint32_t deviceExtensionCount = 1;
-    const char* deviceExtensionNames[deviceExtensionCount]
-    {
-        "VK_KHR_swapchain",
-    };
-
-    VkPhysicalDeviceFeatures enabledFeatures{};
-
-    VkDeviceCreateInfo deviceCreateInfo{};
-    deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    deviceCreateInfo.pNext = nullptr;
-    deviceCreateInfo.flags = 0;
-    deviceCreateInfo.queueCreateInfoCount = multiQueue ? multiQueueCreateInfoCount : singleQueueCreateInfoCount;
-    deviceCreateInfo.pQueueCreateInfos = multiQueue ? multiQueueCreateInfos : singleQueueCreateInfos;
-    deviceCreateInfo.enabledLayerCount = 0;
-    deviceCreateInfo.ppEnabledLayerNames = nullptr;
-    deviceCreateInfo.enabledExtensionCount = deviceExtensionCount;
-    deviceCreateInfo.ppEnabledExtensionNames = deviceExtensionNames;
-    deviceCreateInfo.pEnabledFeatures = &enabledFeatures;
-
-    VkDevice device;
-    ASSERT_SUCCESS(vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &device));
-
-    VkQueue graphicsQueue;
-    vkGetDeviceQueue(device, graphicsQueueFamilyIndex, 0, &graphicsQueue);
-
-    VkQueue presentQueue;
-    vkGetDeviceQueue(device, presentQueueFamilyIndex, 0, &presentQueue);
-
-    VmaAllocatorCreateInfo allocatorCreateInfo{};
-    allocatorCreateInfo.instance = instance;
-    allocatorCreateInfo.physicalDevice = physicalDevice;
-    allocatorCreateInfo.device = device;
-    allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_0;
-
-    VmaAllocator allocator;
-    ASSERT_SUCCESS(vmaCreateAllocator(&allocatorCreateInfo, &allocator));
-
-    VkCommandPoolCreateInfo graphicsCommandPoolCreateInfo{};
-    graphicsCommandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    graphicsCommandPoolCreateInfo.pNext = nullptr;
-    graphicsCommandPoolCreateInfo.flags = 0;
-    graphicsCommandPoolCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
-
-    VkCommandPool graphicsCommandPool;
-    ASSERT_SUCCESS(vkCreateCommandPool(device, &graphicsCommandPoolCreateInfo, nullptr, &graphicsCommandPool));
-
-    VkCommandPoolCreateInfo presentCommandPoolCreateInfo{};
-    presentCommandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    presentCommandPoolCreateInfo.pNext = nullptr;
-    presentCommandPoolCreateInfo.flags = 0;
-    presentCommandPoolCreateInfo.queueFamilyIndex = presentQueueFamilyIndex;
-
-    VkCommandPool presentCommandPool;
-    ASSERT_SUCCESS(vkCreateCommandPool(device, &presentCommandPoolCreateInfo, nullptr, &presentCommandPool));
-
-    VkDescriptorSetLayoutBinding depthBinding{};
-    depthBinding.binding = 0;
-    depthBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    depthBinding.descriptorCount = 1;
-    depthBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    depthBinding.pImmutableSamplers = nullptr;
-
-    VkDescriptorSetLayoutBinding colorBinding{};
-    colorBinding.binding = 1;
-    colorBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    colorBinding.descriptorCount = 1;
-    colorBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    colorBinding.pImmutableSamplers = nullptr;
-
-    VkDescriptorSetLayoutBinding matricesBinding{};
-    matricesBinding.binding = 2;
-    matricesBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    matricesBinding.descriptorCount = 1;
-    matricesBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    matricesBinding.pImmutableSamplers = nullptr;
-
-    const uint32_t bindingCount = 3;
-    VkDescriptorSetLayoutBinding bindings[bindingCount]
-    {
-        depthBinding,
-        colorBinding,
-        matricesBinding
-    };
-
-    VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo{};
-    descriptorSetLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    descriptorSetLayoutCreateInfo.pNext = nullptr;
-    descriptorSetLayoutCreateInfo.flags = 0;
-    descriptorSetLayoutCreateInfo.bindingCount = bindingCount;
-    descriptorSetLayoutCreateInfo.pBindings = bindings;
-    
-    VkDescriptorSetLayout descriptorSetLayout;
-    ASSERT_SUCCESS(vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayout));
-
-    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
-    pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutCreateInfo.pNext = nullptr;
-    pipelineLayoutCreateInfo.flags = 0;
-    pipelineLayoutCreateInfo.setLayoutCount = 1;
-    pipelineLayoutCreateInfo.pSetLayouts = &descriptorSetLayout;
-    pipelineLayoutCreateInfo.pushConstantRangeCount = 0;
-    pipelineLayoutCreateInfo.pPushConstantRanges = nullptr;
-
-    VkPipelineLayout pipelineLayout;
-    ASSERT_SUCCESS(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
-
-    VkPipeline clearPipeline = loadPipeline(device, pipelineLayout, SHADER_PATH "clear.comp.spv");
-    VkPipeline splatPipeline = loadPipeline(device, pipelineLayout, SHADER_PATH "splat.comp.spv");
-    VkPipeline displayPipeline = loadPipeline(device, pipelineLayout, SHADER_PATH "display.comp.spv");
-
-    VkDescriptorPoolSize imagePoolSize{};
-    imagePoolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    imagePoolSize.descriptorCount = 2 * SWAPCHAIN_BUFFER_COUNT;
-
-    VkDescriptorPoolSize bufferPoolSize{};
-    bufferPoolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bufferPoolSize.descriptorCount = 1 * SWAPCHAIN_BUFFER_COUNT;
-
-    const uint32_t poolSizeCount = 2;
-    VkDescriptorPoolSize poolSizes[poolSizeCount]
-    {
-        imagePoolSize,
-        bufferPoolSize
-    };
-
-    VkDescriptorPoolCreateInfo descriptorPoolCreateInfo{};
-    descriptorPoolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    descriptorPoolCreateInfo.pNext = nullptr;
-    descriptorPoolCreateInfo.flags = 0;
-    descriptorPoolCreateInfo.maxSets = SWAPCHAIN_BUFFER_COUNT;
-    descriptorPoolCreateInfo.poolSizeCount = poolSizeCount;
-    descriptorPoolCreateInfo.pPoolSizes = poolSizes;
-
-    VkDescriptorPool descriptorPool;
-    vkCreateDescriptorPool(device, &descriptorPoolCreateInfo, nullptr, &descriptorPool);
-
-    VkDescriptorSetLayout descriptorSetLayouts[SWAPCHAIN_BUFFER_COUNT];
-
-    for (uint32_t i = 0; i < SWAPCHAIN_BUFFER_COUNT; i++)
-    {
-        descriptorSetLayouts[i] = descriptorSetLayout;
-    }
-
-    VkDescriptorSetAllocateInfo descriptorSetAllocateInfo{};
-    descriptorSetAllocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    descriptorSetAllocateInfo.pNext = nullptr;
-    descriptorSetAllocateInfo.descriptorPool = descriptorPool;
-    descriptorSetAllocateInfo.descriptorSetCount = SWAPCHAIN_BUFFER_COUNT;
-    descriptorSetAllocateInfo.pSetLayouts = descriptorSetLayouts;
-
-    VkDescriptorSet descriptorSets[SWAPCHAIN_BUFFER_COUNT];
-    vkAllocateDescriptorSets(device, &descriptorSetAllocateInfo, descriptorSets);
+    Pipeline clearPipeline = loadPipeline(device, pipelineLayout, SHADER_PATH "clear.comp.spv");
+    Pipeline splatPipeline = loadPipeline(device, pipelineLayout, SHADER_PATH "splat.comp.spv");
+    Pipeline displayPipeline = loadPipeline(device, pipelineLayout, SHADER_PATH "display.comp.spv");
 
     uint32_t width = 1280;
     uint32_t height = 720;
@@ -512,132 +114,44 @@ int main()
     GLFWwindow* window = glfwCreateWindow(width, height, "Vulkan window", nullptr, nullptr);
 
     glfwSetKeyCallback(window, key_callback);
+    
+    Surface surface = createGLFWSurface(device, window);
+    Swapchain swapchain = device.createSwapchain(width, height, surface);
 
-    VkSurfaceKHR surface;
-    ASSERT_SUCCESS(glfwCreateWindowSurface(instance, window, nullptr, &surface));
+    DescriptorPool descriptorPool = device.createDescriptorPool(pipelineLayout, WORK_IN_FLIGHT_COUNT);
 
-    VkPresentModeKHR presentModes[16];
-    uint32_t presentModeCount = 16;
-    ASSERT_SUCCESS(vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes));
+    uint32_t workInFlightIndex = 0;
 
-    assert(presentModeCount > 0);
+    Image atomicImages[WORK_IN_FLIGHT_COUNT];
+    Buffer frameDataBuffers[WORK_IN_FLIGHT_COUNT];
+    CommandBuffer commandBuffers[WORK_IN_FLIGHT_COUNT];
+    Fence fences[WORK_IN_FLIGHT_COUNT];
 
-    bool supportsMailbox = false;
-    bool supportsFifoRelaxed = false;
-    bool supportsImmediate = false;
-
-    for (uint32_t i = 0; i < presentModeCount; i++)
+    for (uint32_t i = 0; i < WORK_IN_FLIGHT_COUNT; i++)
     {
-        supportsMailbox = supportsMailbox || presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR;
-        supportsFifoRelaxed = supportsFifoRelaxed || presentModes[i] == VK_PRESENT_MODE_FIFO_RELAXED_KHR;
-        supportsImmediate = supportsImmediate || presentModes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR;
+        atomicImages[i] = device.createImage(width, height, Format::r32_uint);
+        frameDataBuffers[i] = device.createBuffer(sizeof(FrameData));
+        commandBuffers[i] = NULL_HANDLE;
+        fences[i] = NULL_HANDLE;
     }
 
-    VkPresentModeKHR presentMode =
-        supportsMailbox ? VK_PRESENT_MODE_MAILBOX_KHR :
-        supportsFifoRelaxed ? VK_PRESENT_MODE_FIFO_RELAXED_KHR :
-        supportsImmediate ? VK_PRESENT_MODE_IMMEDIATE_KHR :
-        VK_PRESENT_MODE_FIFO_KHR;
-
-    Swapchain swapchain = createSwapchain(device, allocator, surface, presentMode, width, height);
-
-    VkBufferCreateInfo bufferCreateInfo{};
-    bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferCreateInfo.pNext = nullptr;
-    bufferCreateInfo.flags = 0;
-    bufferCreateInfo.size = SWAPCHAIN_BUFFER_COUNT * sizeof(FrameData);
-    bufferCreateInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    bufferCreateInfo.queueFamilyIndexCount = 0;
-    bufferCreateInfo.pQueueFamilyIndices = nullptr;
-
-    VmaAllocationCreateInfo allocationCreateInfo{};
-    allocationCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-    allocationCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    allocationCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-
-    VkBuffer buffer;
-    VmaAllocation bufferAllocation;
-    VmaAllocationInfo bufferAllocationInfo;
-    ASSERT_SUCCESS(vmaCreateBuffer(allocator, &bufferCreateInfo, &allocationCreateInfo, &buffer, &bufferAllocation, &bufferAllocationInfo));
-
-    FrameData* pMappedFrameData = reinterpret_cast<FrameData*>(bufferAllocationInfo.pMappedData);
-
-    float angle = 0.0f;
-
-    WorkInFlight workInFlights[SWAPCHAIN_BUFFER_COUNT];
-
-    for (uint32_t i = 0; i < SWAPCHAIN_BUFFER_COUNT; i++)
-    {
-        workInFlights[i] = {};  // sets all to null
-    }
-
-    // we need a very large pool of semaphores because it improves our odds of not deleting a semaphore that's in use
-    // see https://github.com/KhronosGroup/Vulkan-Docs/issues/2007
-    const uint32_t presentSemaphoreCount = 64;
-    VkSemaphore presentSemaphores[presentSemaphoreCount];
-    for (uint32_t i = 0; i < presentSemaphoreCount; i++)
-    {
-        presentSemaphores[i] = VK_NULL_HANDLE;
-    }
-
-    uint32_t presentSemaphoreIndex = 0;
+    std::chrono::steady_clock::time_point startTime = std::chrono::high_resolution_clock::now();
 
     while (!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
 
-        VkSemaphoreCreateInfo semaphoreCreateInfo{};
-        semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        semaphoreCreateInfo.pNext = nullptr;
-        semaphoreCreateInfo.flags = 0;
+        Image swapchainImage;
+        device.acquireSwapchainImage(swapchain, &swapchainImage);
 
-        VkSemaphore acquireSemaphore;
-        ASSERT_SUCCESS(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &acquireSemaphore));
-
-        VkSemaphore queueTransferSemaphore;
-        ASSERT_SUCCESS(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &queueTransferSemaphore));
-
-        VkFenceCreateInfo fenceCreateInfo{};
-        fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        fenceCreateInfo.pNext = nullptr;
-        fenceCreateInfo.flags = 0;
-
-        VkFence acquireFence;
-        ASSERT_SUCCESS(vkCreateFence(device, &fenceCreateInfo, nullptr, &acquireFence));
-
-        VkFence renderingFence;
-        ASSERT_SUCCESS(vkCreateFence(device, &fenceCreateInfo, nullptr, &renderingFence));
-
-        uint32_t imageIndex;
-        VkResult acquireResult = vkAcquireNextImageKHR(device, swapchain.swapchain, UINT64_MAX, acquireSemaphore, acquireFence, &imageIndex);
-
-        assert(acquireResult == VK_SUCCESS || acquireResult == VK_ERROR_OUT_OF_DATE_KHR || acquireResult == VK_SUBOPTIMAL_KHR);
-
-        if (workInFlights[imageIndex].renderingFence != VK_NULL_HANDLE)
+        if (fences[workInFlightIndex].handle != 0)
         {
-            ASSERT_SUCCESS(vkWaitForFences(device, 1, &workInFlights[imageIndex].renderingFence, VK_TRUE, UINT64_MAX));
-
-            vkFreeCommandBuffers(device, graphicsCommandPool, 1, &workInFlights[imageIndex].graphicsCommandBuffer);
-            vkFreeCommandBuffers(device, presentCommandPool, 1, &workInFlights[imageIndex].presentCommandBuffer);
-            vkDestroySemaphore(device, workInFlights[imageIndex].acquireSemaphore, nullptr);
-            vkDestroySemaphore(device, workInFlights[imageIndex].queueTransferSemaphore, nullptr);
-            vkDestroyFence(device, workInFlights[imageIndex].renderingFence, nullptr);
+            device.waitForFence(fences[workInFlightIndex]);
+            device.destroyCommandBuffer(commandBuffers[workInFlightIndex]);
+            device.destroyFence(fences[workInFlightIndex]);
         }
 
-        ASSERT_SUCCESS(vkWaitForFences(device, 1, &acquireFence, VK_TRUE, UINT64_MAX));
-
-        vkDestroyFence(device, acquireFence, nullptr);
-
-        if (presentSemaphores[presentSemaphoreIndex] != VK_NULL_HANDLE)
-        {
-            vkDestroySemaphore(device, presentSemaphores[presentSemaphoreIndex], nullptr);
-        }
-
-        VkSemaphore presentSemaphore;
-        ASSERT_SUCCESS(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &presentSemaphore));
-
-        angle += 0.01f;
+        float angle = 6.2831855f * static_cast<float>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - startTime).count() & 0xFFFFFFFF) / float(0xFFFFFFFF);
 
         glm::mat4 view = glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(0.0, 0.0, -15.0)), angle, glm::vec3(0.0f, 1.0f, 0.0f));
 
@@ -654,397 +168,122 @@ int main()
         frameData.exposure = 500.0f / pow(3.0f, static_cast<float>(FRACTAL_ITERATIONS));
         frameData.iterationCount = FRACTAL_ITERATIONS - 3;
 
-        pMappedFrameData[imageIndex] = frameData;
+        device.udpateBuffer(frameDataBuffers[workInFlightIndex], 0, sizeof(FrameData), &frameData);
 
-        vmaFlushAllocation(allocator, bufferAllocation, imageIndex * sizeof(FrameData), sizeof(FrameData));
+        Descriptor atomicImageDescriptor{};
+        atomicImageDescriptor.descriptorType = DescriptorType::StorageImage;
+        atomicImageDescriptor.image = atomicImages[workInFlightIndex];
+        atomicImageDescriptor.buffer = NULL_HANDLE;
 
-        VkDescriptorImageInfo depthInfo{};
-        depthInfo.sampler = VK_NULL_HANDLE;
-        depthInfo.imageView = swapchain.depthImageViews[imageIndex];
-        depthInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        Descriptor swapchainImageDescriptor{};
+        swapchainImageDescriptor.descriptorType = DescriptorType::StorageImage;
+        swapchainImageDescriptor.image = swapchainImage;
+        swapchainImageDescriptor.buffer = NULL_HANDLE;
 
-        VkWriteDescriptorSet depthWrite{};
-        depthWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        depthWrite.pNext = nullptr;
-        depthWrite.dstSet = descriptorSets[imageIndex];
-        depthWrite.dstBinding = 0;
-        depthWrite.dstArrayElement = 0;
-        depthWrite.descriptorCount = 1;
-        depthWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        depthWrite.pImageInfo = &depthInfo;
-        depthWrite.pBufferInfo = nullptr;
-        depthWrite.pTexelBufferView = nullptr;
+        Descriptor frameDataBufferDescriptor{};
+        frameDataBufferDescriptor.descriptorType = DescriptorType::UniformBuffer;
+        frameDataBufferDescriptor.image = NULL_HANDLE;
+        frameDataBufferDescriptor.buffer = frameDataBuffers[workInFlightIndex];
 
-        VkDescriptorImageInfo colorInfo{};
-        colorInfo.sampler = VK_NULL_HANDLE;
-        colorInfo.imageView = swapchain.colorImageViews[imageIndex];
-        colorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-        VkWriteDescriptorSet colorWrite{};
-        colorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        colorWrite.pNext = nullptr;
-        colorWrite.dstSet = descriptorSets[imageIndex];
-        colorWrite.dstBinding = 1;
-        colorWrite.dstArrayElement = 0;
-        colorWrite.descriptorCount = 1;
-        colorWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        colorWrite.pImageInfo = &colorInfo;
-        colorWrite.pBufferInfo = nullptr;
-        colorWrite.pTexelBufferView = nullptr;
-
-        VkDescriptorBufferInfo matricesInfo{};
-        matricesInfo.buffer = buffer;
-        matricesInfo.offset = imageIndex * sizeof(FrameData);
-        matricesInfo.range = sizeof(FrameData);
-
-        VkWriteDescriptorSet matricesWrite{};
-        matricesWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        matricesWrite.pNext = nullptr;
-        matricesWrite.dstSet = descriptorSets[imageIndex];
-        matricesWrite.dstBinding = 2;
-        matricesWrite.dstArrayElement = 0;
-        matricesWrite.descriptorCount = 1;
-        matricesWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        matricesWrite.pImageInfo = nullptr;
-        matricesWrite.pBufferInfo = &matricesInfo;
-        matricesWrite.pTexelBufferView = nullptr;
-
-        const uint32_t descriptorWriteCount = 3;
-        VkWriteDescriptorSet descriptorWrites[descriptorWriteCount]
+        const uint32_t descriptorCount = 3;
+        Descriptor descriptors[descriptorCount]
         {
-            depthWrite,
-            colorWrite,
-            matricesWrite
+            atomicImageDescriptor,
+            swapchainImageDescriptor,
+            frameDataBufferDescriptor
         };
 
-        vkUpdateDescriptorSets(device, descriptorWriteCount, descriptorWrites, 0, nullptr);
+        device.updateDescriptorSet(descriptorPool, workInFlightIndex, descriptorCount, descriptors);
 
-        VkCommandBufferAllocateInfo graphicsCommandBufferAllocateInfo{};
-        graphicsCommandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        graphicsCommandBufferAllocateInfo.pNext = nullptr;
-        graphicsCommandBufferAllocateInfo.commandPool = graphicsCommandPool;
-        graphicsCommandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        graphicsCommandBufferAllocateInfo.commandBufferCount = 1;
+        CommandBuffer commandBuffer = device.createCommandBuffer();
 
-        VkCommandBuffer graphicsCommandBuffer;
-        ASSERT_SUCCESS(vkAllocateCommandBuffers(device, &graphicsCommandBufferAllocateInfo, &graphicsCommandBuffer));
+        commandBuffer.begin();
 
-        VkCommandBufferAllocateInfo presentCommandBufferAllocateInfo{};
-        presentCommandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        presentCommandBufferAllocateInfo.pNext = nullptr;
-        presentCommandBufferAllocateInfo.commandPool = presentCommandPool;
-        presentCommandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        presentCommandBufferAllocateInfo.commandBufferCount = 1;
+        commandBuffer.bindDescriptorSet(pipelineLayout, descriptorPool, workInFlightIndex);
+        commandBuffer.bindPipeline(clearPipeline);
+        commandBuffer.dispatch((width + 15) / 16, (height + 15) / 16, 1);
+        commandBuffer.memoryBarrier();
+        commandBuffer.bindPipeline(splatPipeline);
+        commandBuffer.dispatch((UINT_POW(3, FRACTAL_ITERATIONS - 3) + 255u) / 256u, 1, 1);
+        commandBuffer.memoryBarrier();
+        commandBuffer.bindPipeline(displayPipeline);
+        commandBuffer.dispatch((width + 15) / 16, (height + 15) / 16, 1);
 
-        VkCommandBuffer presentCommandBuffer;
-        ASSERT_SUCCESS(vkAllocateCommandBuffers(device, &presentCommandBufferAllocateInfo, &presentCommandBuffer));
+        commandBuffer.end();
 
-        VkCommandBufferBeginInfo graphicsCommandBufferBeginInfo{};
-        graphicsCommandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        graphicsCommandBufferBeginInfo.pNext = nullptr;
-        graphicsCommandBufferBeginInfo.flags = 0;
-        graphicsCommandBufferBeginInfo.pInheritanceInfo = nullptr;
+        Fence fence = device.createFence();
+        device.submit(commandBuffer, fence);
 
-        ASSERT_SUCCESS(vkBeginCommandBuffer(graphicsCommandBuffer, &graphicsCommandBufferBeginInfo));
+        SwapchainResult presentResult = device.presentSwapchainImage(swapchain, swapchainImage);
 
-        vkCmdBindDescriptorSets(graphicsCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSets[imageIndex], 0, nullptr);
+        fences[workInFlightIndex] = fence;
+        commandBuffers[workInFlightIndex] = commandBuffer;
+        workInFlightIndex = (workInFlightIndex + 1) % WORK_IN_FLIGHT_COUNT;
 
-        VkImageSubresourceRange wholeImageRange{};
-        wholeImageRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        wholeImageRange.baseMipLevel = 0;
-        wholeImageRange.levelCount = 1;
-        wholeImageRange.baseArrayLayer = 0;
-        wholeImageRange.layerCount = 1;
-
-        VkImageMemoryBarrier depthToComputeBarrier{};
-        depthToComputeBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        depthToComputeBarrier.pNext = nullptr;
-        depthToComputeBarrier.srcAccessMask = 0;
-        depthToComputeBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        depthToComputeBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        depthToComputeBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        depthToComputeBarrier.srcQueueFamilyIndex = graphicsQueueFamilyIndex;
-        depthToComputeBarrier.dstQueueFamilyIndex = graphicsQueueFamilyIndex;
-        depthToComputeBarrier.image = swapchain.depthImages[imageIndex];
-        depthToComputeBarrier.subresourceRange = wholeImageRange;
-
-        VkImageMemoryBarrier colorToComputeBarrier{};
-        colorToComputeBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        colorToComputeBarrier.pNext = nullptr;
-        colorToComputeBarrier.srcAccessMask = 0;
-        colorToComputeBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        colorToComputeBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        colorToComputeBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        colorToComputeBarrier.srcQueueFamilyIndex = graphicsQueueFamilyIndex;
-        colorToComputeBarrier.dstQueueFamilyIndex = graphicsQueueFamilyIndex;
-        colorToComputeBarrier.image = swapchain.colorImages[imageIndex];
-        colorToComputeBarrier.subresourceRange = wholeImageRange;
-
-        VkImageMemoryBarrier depthComputeToComputeBarrier{};
-        depthComputeToComputeBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        depthComputeToComputeBarrier.pNext = nullptr;
-        depthComputeToComputeBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        depthComputeToComputeBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        depthComputeToComputeBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        depthComputeToComputeBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        depthComputeToComputeBarrier.srcQueueFamilyIndex = graphicsQueueFamilyIndex;
-        depthComputeToComputeBarrier.dstQueueFamilyIndex = graphicsQueueFamilyIndex;
-        depthComputeToComputeBarrier.image = swapchain.depthImages[imageIndex];
-        depthComputeToComputeBarrier.subresourceRange = wholeImageRange;
-
-        VkImageMemoryBarrier colorComputeToPresentBarrier{};
-        colorComputeToPresentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        colorComputeToPresentBarrier.pNext = nullptr;
-        colorComputeToPresentBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        colorComputeToPresentBarrier.dstAccessMask = 0;
-        colorComputeToPresentBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        colorComputeToPresentBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        colorComputeToPresentBarrier.srcQueueFamilyIndex = graphicsQueueFamilyIndex;
-        colorComputeToPresentBarrier.dstQueueFamilyIndex = graphicsQueueFamilyIndex;
-        colorComputeToPresentBarrier.image = swapchain.colorImages[imageIndex];
-        colorComputeToPresentBarrier.subresourceRange = wholeImageRange;
-
-        VkImageMemoryBarrier colorComputeToOwnershipReleaseBarrier{};
-        colorComputeToOwnershipReleaseBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        colorComputeToOwnershipReleaseBarrier.pNext = nullptr;
-        colorComputeToOwnershipReleaseBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        colorComputeToOwnershipReleaseBarrier.dstAccessMask = 0;
-        colorComputeToOwnershipReleaseBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        colorComputeToOwnershipReleaseBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        colorComputeToOwnershipReleaseBarrier.srcQueueFamilyIndex = graphicsQueueFamilyIndex;
-        colorComputeToOwnershipReleaseBarrier.dstQueueFamilyIndex = presentQueueFamilyIndex;
-        colorComputeToOwnershipReleaseBarrier.image = swapchain.colorImages[imageIndex];
-        colorComputeToOwnershipReleaseBarrier.subresourceRange = wholeImageRange;
-
-        VkImageMemoryBarrier colorOwnershipAcquireToPresentBarrier{};
-        colorOwnershipAcquireToPresentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        colorOwnershipAcquireToPresentBarrier.pNext = nullptr;
-        colorOwnershipAcquireToPresentBarrier.srcAccessMask = 0;  // handled by semaphore
-        colorOwnershipAcquireToPresentBarrier.dstAccessMask = 0;
-        colorOwnershipAcquireToPresentBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        colorOwnershipAcquireToPresentBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        colorOwnershipAcquireToPresentBarrier.srcQueueFamilyIndex = graphicsQueueFamilyIndex;
-        colorOwnershipAcquireToPresentBarrier.dstQueueFamilyIndex = presentQueueFamilyIndex;
-        colorOwnershipAcquireToPresentBarrier.image = swapchain.colorImages[imageIndex];
-        colorOwnershipAcquireToPresentBarrier.subresourceRange = wholeImageRange;
-
-        const uint32_t imageMemoryBarrierCount = 2;
-        VkImageMemoryBarrier imageMemoryBarriers[imageMemoryBarrierCount]
+        if (presentResult != SwapchainResult::Success)
         {
-            depthToComputeBarrier,
-            colorToComputeBarrier
-        };
+            for (uint32_t i = 0; i < WORK_IN_FLIGHT_COUNT; i++)
+            {
+                if (fences[i].handle != 0)
+                {
+                    device.waitForFence(fences[i]);
+                }
 
-        // transition depth/color image
-        vkCmdPipelineBarrier(graphicsCommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, imageMemoryBarrierCount, imageMemoryBarriers);
+                device.destroyImage(atomicImages[i]);
+                device.destroyBuffer(frameDataBuffers[i]);
+            }
 
-        vkCmdBindPipeline(graphicsCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, clearPipeline);
-        vkCmdDispatch(graphicsCommandBuffer, (width + 15u) / 16u, (height + 15u) / 16u, 1);
+            device.destroySwapchain(swapchain);
 
-        // guard depth writes against reads/writes
-        vkCmdPipelineBarrier(graphicsCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &depthComputeToComputeBarrier);
-
-        vkCmdBindPipeline(graphicsCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, splatPipeline);
-        vkCmdDispatch(graphicsCommandBuffer, (UINT_POW(3, FRACTAL_ITERATIONS - 3) + 255u) / 256u, 1, 1);
-
-        // guard depth writes against reads
-        vkCmdPipelineBarrier(graphicsCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &depthComputeToComputeBarrier);
-
-        vkCmdBindPipeline(graphicsCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, displayPipeline);
-        vkCmdDispatch(graphicsCommandBuffer, (width + 15u) / 16u, (height + 15u) / 16u, 1);
-
-        VkResult presentResult;
-
-        if (multiQueue)
-        {
-            // release ownership
-            vkCmdPipelineBarrier(graphicsCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &colorComputeToOwnershipReleaseBarrier);
-
-            ASSERT_SUCCESS(vkEndCommandBuffer(graphicsCommandBuffer));
-
-            VkPipelineStageFlags graphicsWaitDstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-
-            VkSubmitInfo graphicsSubmitInfo{};
-            graphicsSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            graphicsSubmitInfo.pNext = nullptr;
-            graphicsSubmitInfo.waitSemaphoreCount = 1;
-            graphicsSubmitInfo.pWaitSemaphores = &acquireSemaphore;
-            graphicsSubmitInfo.pWaitDstStageMask = &graphicsWaitDstStageMask;
-            graphicsSubmitInfo.commandBufferCount = 1;
-            graphicsSubmitInfo.pCommandBuffers = &graphicsCommandBuffer;
-            graphicsSubmitInfo.signalSemaphoreCount = 1;
-            graphicsSubmitInfo.pSignalSemaphores = &queueTransferSemaphore;
-
-            ASSERT_SUCCESS(vkQueueSubmit(graphicsQueue, 1, &graphicsSubmitInfo, nullptr));
-
-            VkCommandBufferBeginInfo presentCommandBufferBeginInfo{};
-            presentCommandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            presentCommandBufferBeginInfo.pNext = nullptr;
-            presentCommandBufferBeginInfo.flags = 0;
-            presentCommandBufferBeginInfo.pInheritanceInfo = nullptr;
-
-            ASSERT_SUCCESS(vkBeginCommandBuffer(presentCommandBuffer, &presentCommandBufferBeginInfo));
-
-            // transfer image from graphics to present queue
-            vkCmdPipelineBarrier(presentCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &colorOwnershipAcquireToPresentBarrier);
-
-            ASSERT_SUCCESS(vkEndCommandBuffer(presentCommandBuffer));
-
-            VkPipelineStageFlags presentWaitDstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-
-            VkSubmitInfo presentSubmitInfo{};
-            presentSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            presentSubmitInfo.pNext = nullptr;
-            presentSubmitInfo.waitSemaphoreCount = 1;
-            presentSubmitInfo.pWaitSemaphores = &queueTransferSemaphore;
-            presentSubmitInfo.pWaitDstStageMask = &presentWaitDstStageMask;
-            presentSubmitInfo.commandBufferCount = 1;
-            presentSubmitInfo.pCommandBuffers = &presentCommandBuffer;
-            presentSubmitInfo.signalSemaphoreCount = 1;
-            presentSubmitInfo.pSignalSemaphores = &presentSemaphore;
-
-            ASSERT_SUCCESS(vkQueueSubmit(presentQueue, 1, &presentSubmitInfo, renderingFence));
-
-            VkPresentInfoKHR presentInfo{};
-            presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-            presentInfo.pNext = nullptr;
-            presentInfo.waitSemaphoreCount = 1;
-            presentInfo.pWaitSemaphores = &presentSemaphore;
-            presentInfo.swapchainCount = 1;
-            presentInfo.pSwapchains = &swapchain.swapchain;
-            presentInfo.pImageIndices = &imageIndex;
-            presentInfo.pResults = nullptr;
-
-            presentResult = vkQueuePresentKHR(presentQueue, &presentInfo);
-
-        }
-        else
-        {    // transfer image from graphics to present queue
-            vkCmdPipelineBarrier(graphicsCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &colorComputeToPresentBarrier);
-
-            ASSERT_SUCCESS(vkEndCommandBuffer(graphicsCommandBuffer));
-
-            VkPipelineStageFlags graphicsWaitDstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-
-            VkSubmitInfo graphicsSubmitInfo{};
-            graphicsSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            graphicsSubmitInfo.pNext = nullptr;
-            graphicsSubmitInfo.waitSemaphoreCount = 1;
-            graphicsSubmitInfo.pWaitSemaphores = &acquireSemaphore;
-            graphicsSubmitInfo.pWaitDstStageMask = &graphicsWaitDstStageMask;
-            graphicsSubmitInfo.commandBufferCount = 1;
-            graphicsSubmitInfo.pCommandBuffers = &graphicsCommandBuffer;
-            graphicsSubmitInfo.signalSemaphoreCount = 1;
-            graphicsSubmitInfo.pSignalSemaphores = &presentSemaphore;
-
-            ASSERT_SUCCESS(vkQueueSubmit(graphicsQueue, 1, &graphicsSubmitInfo, renderingFence));
-
-            VkPresentInfoKHR presentInfo{};
-            presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-            presentInfo.pNext = nullptr;
-            presentInfo.waitSemaphoreCount = 1;
-            presentInfo.pWaitSemaphores = &presentSemaphore;
-            presentInfo.swapchainCount = 1;
-            presentInfo.pSwapchains = &swapchain.swapchain;
-            presentInfo.pImageIndices = &imageIndex;
-            presentInfo.pResults = nullptr;
-
-            presentResult = vkQueuePresentKHR(graphicsQueue, &presentInfo);
-        }
-
-        WorkInFlight newWorkInFlight{};
-        newWorkInFlight.graphicsCommandBuffer = graphicsCommandBuffer;
-        newWorkInFlight.presentCommandBuffer = presentCommandBuffer;
-        newWorkInFlight.acquireSemaphore = acquireSemaphore;
-        newWorkInFlight.queueTransferSemaphore = queueTransferSemaphore;
-        newWorkInFlight.renderingFence = renderingFence;
-
-        workInFlights[imageIndex] = newWorkInFlight;
-
-        presentSemaphores[presentSemaphoreIndex] = presentSemaphore;
-
-        presentSemaphoreIndex = (presentSemaphoreIndex + 1) % presentSemaphoreCount;
-
-        if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR)
-        {
             int newWidth = 0;
             int newHeight = 0;
 
             while ((newWidth == 0 || newHeight == 0) && !glfwWindowShouldClose(window))
             {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 glfwPollEvents();
                 glfwGetWindowSize(window, &newWidth, &newHeight);
             }
 
-            if (newWidth > 0 && newHeight > 0)
+            width = static_cast<uint32_t>(newWidth);
+            height = static_cast<uint32_t>(newHeight);
+
+            swapchain = device.createSwapchain(width, height, surface);
+
+            for (uint32_t i = 0; i < WORK_IN_FLIGHT_COUNT; i++)
             {
-                // doesn't make the deletion of the present semaphore safe, see https://github.com/KhronosGroup/Vulkan-Docs/issues/2007
-                // I hate this
-                vkDeviceWaitIdle(device);
-
-                destroySwapchain(device, allocator, swapchain);
-
-                width = static_cast<uint32_t>(newWidth);
-                height = static_cast<uint32_t>(newHeight);
-
-                swapchain = createSwapchain(device, allocator, surface, presentMode, width, height);
+                atomicImages[i] = device.createImage(width, height, Format::r32_uint);
+                frameDataBuffers[i] = device.createBuffer(sizeof(FrameData));
             }
         }
-        else
-        {
-            ASSERT_SUCCESS(presentResult);
-        }
     }
 
-    vkDeviceWaitIdle(device);
-
-    for (uint32_t i = 0; i < SWAPCHAIN_BUFFER_COUNT; i++)
+    for (uint32_t i = 0; i < WORK_IN_FLIGHT_COUNT; i++)
     {
-        if (workInFlights[i].renderingFence != VK_NULL_HANDLE)
+        if (fences[i].handle != 0)
         {
-            vkFreeCommandBuffers(device, graphicsCommandPool, 1, &workInFlights[i].graphicsCommandBuffer);
-            vkFreeCommandBuffers(device, presentCommandPool, 1, &workInFlights[i].presentCommandBuffer);
-            vkDestroySemaphore(device, workInFlights[i].acquireSemaphore, nullptr);
-            vkDestroySemaphore(device, workInFlights[i].queueTransferSemaphore, nullptr);
-            vkDestroyFence(device, workInFlights[i].renderingFence, nullptr);
+            device.waitForFence(fences[i]);
+            device.destroyCommandBuffer(commandBuffers[i]);
+            device.destroyFence(fences[i]);
         }
+
+        device.destroyImage(atomicImages[i]);
+        device.destroyBuffer(frameDataBuffers[i]);
     }
 
-    for (uint32_t i = 0; i < presentSemaphoreCount; i++)
-    {
-        if (presentSemaphores[i] != VK_NULL_HANDLE)
-        {
-            vkDestroySemaphore(device, presentSemaphores[i], nullptr);
-        }
-    }
+    device.destroyDescriptorPool(descriptorPool);
 
-    vmaDestroyBuffer(allocator, buffer, bufferAllocation);
+    device.destroySwapchain(swapchain);
 
-    destroySwapchain(device, allocator, swapchain);
+    destroyGLFWSurface(device, surface);
 
-    vkDestroySurfaceKHR(instance, surface, nullptr);
+    device.destroyPipeline(displayPipeline);
+    device.destroyPipeline(splatPipeline);
+    device.destroyPipeline(clearPipeline);
 
-    vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+    device.destroyPipelineLayout(pipelineLayout);
 
-    vkDestroyPipeline(device, displayPipeline, nullptr);
-    vkDestroyPipeline(device, splatPipeline, nullptr);
-    vkDestroyPipeline(device, clearPipeline, nullptr);
-
-    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-
-    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-
-    vkDestroyCommandPool(device, presentCommandPool, nullptr);
-
-    vkDestroyCommandPool(device, graphicsCommandPool, nullptr);
-
-    vmaDestroyAllocator(allocator);
-
-    vkDestroyDevice(device, nullptr);
-
-    vkDestroyInstance(instance, nullptr);
-
-    glfwDestroyWindow(window);
+    destroyDevice(device);
 
     glfwTerminate();
 

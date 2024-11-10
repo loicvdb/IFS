@@ -17,6 +17,11 @@ target_include_directories(IFS PRIVATE
 )
 
 target_sources(IFS PRIVATE
+	src/abstraction.h
+	src/abstraction_glfw.cpp
+	src/abstraction_glfw.h
+	src/abstraction_native.cpp
+	src/abstraction_native.h
 	src/main.cpp
 )
 
